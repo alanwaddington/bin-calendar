@@ -40,7 +40,7 @@ function parseIcs(icsText) {
     }
     events.push({
       uid: entry.uid,
-      summary: entry.summary || 'Bin Collection',
+      summary: extractText(entry.summary) || 'Bin Collection',
       start: entry.start,
       end: entry.end,
       description: entry.description || '',
@@ -54,6 +54,13 @@ function parseIcs(icsText) {
 async function fetchIcs(uprn) {
   const icsText = await fetchWithRetry(uprn);
   return parseIcs(icsText);
+}
+
+// node-ical returns parameterised properties (e.g. SUMMARY;LANGUAGE=en-gb) as objects with a val field
+function extractText(value) {
+  if (!value) return '';
+  if (typeof value === 'object') return String(value.val || '').trim();
+  return String(value).trim();
 }
 
 function sleep(ms) {
