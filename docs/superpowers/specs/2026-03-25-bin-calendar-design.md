@@ -29,6 +29,7 @@ Out of scope (for now):
 - Email notifications on sync failure
 - Updating events that already exist but have changed (existing events are skipped by UID, not updated)
 - Selecting a non-primary Google Calendar
+- Caching getAddress.io results
 
 ---
 
@@ -45,6 +46,7 @@ bin-calendar/
 │   ├── ics.js             # Fetches and parses EAC ICS endpoint
 │   ├── google.js          # Google Calendar API integration (googleapis)
 │   ├── icloud.js          # iCloud CalDAV integration (tsdav)
+│   ├── uprn.js            # getAddress.io address/UPRN lookup
 │   └── db.js              # SQLite via better-sqlite3, applies migrations at startup
 ├── src/migrations/        # Sequential SQL migration files (001.sql, 002.sql, ...)
 ├── public/                # Web UI (plain HTML/CSS/JS, no framework)
@@ -136,15 +138,44 @@ The SQLite database is stored at `/app/data/bin-calendar.db` inside the containe
 
 ---
 
+## UPRN Lookup
+
+Uses the **getAddress.io** REST API to resolve a postcode to a list of addresses with their UPRNs.
+
+**Endpoint:**
+```
+GET https://api.getAddress.io/autocomplete/{postcode}?api-key={GETADDRESS_API_KEY}
+```
+
+**Flow in the Add Property form:**
+1. User types a postcode into a "Find address" field and clicks "Search"
+2. App calls `GET /api/uprn/lookup?postcode=<postcode>` (proxied server-side to keep the API key out of the browser)
+3. Server calls getAddress.io with a 5-second timeout; on success returns the address list to the UI
+4. UI populates an address dropdown; user selects their address
+5. The UPRN from the selected result auto-populates the UPRN field; the postcode field clears
+6. User can then continue filling in the rest of the form normally, or override the UPRN manually
+
+**Error handling:**
+- Invalid postcode or no results: inline message "No addresses found for that postcode"
+- Timeout or API error: inline message "Address lookup unavailable — enter your UPRN manually"
+- Missing `GETADDRESS_API_KEY`: the "Find address" field is hidden and users enter the UPRN directly
+
+**Startup validation:** If `GETADDRESS_API_KEY` is absent, the app starts normally — the address lookup feature is disabled but the rest of the app is unaffected.
+
+**Prerequisite:** Sign up at getAddress.io and add `GETADDRESS_API_KEY` to the compose environment.
+
+---
+
 ## Startup
 
 On startup, before accepting requests, the app:
 
 1. **Validates environment:** Asserts `ENCRYPTION_KEY` is present and exactly 64 hex characters (32 bytes). If missing or malformed, the process exits with a clear error message — the container will not start.
 2. **Google credentials:** If `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is absent, the app starts but the Google OAuth flow is unavailable. The Add Property form disables the Google calendar type and shows a configuration warning.
-3. **Applies DB migrations:** Runs any unapplied migration files.
-4. **Recovers interrupted syncs:** Any `sync_runs` row with `status = 'running'` is updated to `status = 'failed'` with `error = 'Interrupted by restart'`. This releases the concurrency lock if the previous process crashed mid-sync.
-5. **Starts the scheduler** and begins accepting requests.
+3. **getAddress.io key:** If `GETADDRESS_API_KEY` is absent, the app starts normally but the address lookup field is hidden in the Add Property form — users enter UPRNs manually.
+4. **Applies DB migrations:** Runs any unapplied migration files.
+5. **Recovers interrupted syncs:** Any `sync_runs` row with `status = 'running'` is updated to `status = 'failed'` with `error = 'Interrupted by restart'`. This releases the concurrency lock if the previous process crashed mid-sync.
+6. **Starts the scheduler** and begins accepting requests.
 
 ---
 
@@ -283,6 +314,7 @@ Sidebar navigation layout with three sections:
   - Calendar type selector (Google disabled with warning if Google env vars not set)
   - *If Google*: "Save & Connect Google Calendar" button → two-phase OAuth2 flow
   - *If iCloud*: Apple ID, app-specific password, "Fetch Calendars" button, calendar dropdown
+  - Postcode "Find address" field + address dropdown (auto-populates UPRN; hidden if `GETADDRESS_API_KEY` not set)
 
 ### Logs
 - Scrollable list of sync runs, newest first
@@ -383,7 +415,8 @@ services:
       - GOOGLE_CLIENT_ID=<your-google-client-id>
       - GOOGLE_CLIENT_SECRET=<your-google-client-secret>
       - GOOGLE_REDIRECT_URI=http://<nas-ip>:3000/auth/google/callback
-      - PORT=3000   # optional, defaults to 3000
+      - PORT=3000                        # optional, defaults to 3000
+      - GETADDRESS_API_KEY=<your-key>   # optional; disables address lookup if absent
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 60s
@@ -438,6 +471,7 @@ Or use Container Manager UI: stop, pull, start. The SQLite database persists in 
 | `googleapis` | Google Calendar API |
 | `tsdav` | iCloud CalDAV |
 | `node-ical` | ICS parsing |
+| `node-fetch` or built-in `fetch` | getAddress.io API calls |
 
 ---
 
