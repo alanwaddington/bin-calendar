@@ -40,10 +40,11 @@ function parseIcs(icsText) {
     }
     events.push({
       uid: entry.uid,
-      summary: entry.summary,
+      summary: entry.summary || 'Bin Collection',
       start: entry.start,
       end: entry.end,
       description: entry.description || '',
+      allDay: entry.datetype === 'date',
     });
   }
 

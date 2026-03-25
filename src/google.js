@@ -65,13 +65,19 @@ async function listEvents(property, timeMin, timeMax) {
 async function insertEvent(property, event) {
   const auth = await getAuthenticatedClient(property);
   const calendar = google.calendar({ version: 'v3', auth });
+  const start = event.allDay
+    ? { date: event.start.toISOString().slice(0, 10) }
+    : { dateTime: event.start.toISOString() };
+  const end = event.allDay
+    ? { date: event.end.toISOString().slice(0, 10) }
+    : { dateTime: event.end.toISOString() };
   await calendar.events.import({
     calendarId: property.calendar_id,
     requestBody: {
       iCalUID: event.uid,
       summary: event.summary,
-      start: { dateTime: event.start.toISOString() },
-      end: { dateTime: event.end.toISOString() },
+      start,
+      end,
       description: event.description,
     },
   });
