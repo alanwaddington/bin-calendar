@@ -2,10 +2,7 @@ const { google } = require('googleapis');
 const { encryptJson, decryptJson } = require('./crypto');
 const { getDb } = require('./db');
 
-const SCOPE = [
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/calendar.readonly',
-];
+const SCOPE = 'https://www.googleapis.com/auth/calendar';
 
 function createOAuthClient() {
   return new google.auth.OAuth2(
@@ -68,7 +65,7 @@ async function listEvents(property, timeMin, timeMax) {
 async function insertEvent(property, event) {
   const auth = await getAuthenticatedClient(property);
   const calendar = google.calendar({ version: 'v3', auth });
-  await calendar.events.insert({
+  await calendar.events.import({
     calendarId: property.calendar_id,
     requestBody: {
       iCalUID: event.uid,
