@@ -1,20 +1,5 @@
 registerView('properties', loadProperties);
 
-// Handle OAuth redirect result query params on page load
-(function handleOAuthResult() {
-  const params = new URLSearchParams(location.search);
-  const success = params.get('success');
-  const error = params.get('error');
-  if (success === 'google_connected') showToast('Google Calendar connected');
-  if (error) {
-    const messages = {
-      oauth_expired: 'OAuth session expired — please try again',
-      google_denied: 'Google access was denied',
-      oauth_failed: 'Connection failed — please try again',
-    };
-    showToast(messages[error] || 'An error occurred', 'error');
-  }
-})();
 
 async function loadProperties() {
   const el = document.getElementById('view-properties');
@@ -123,12 +108,37 @@ function renderCalendarFields() {
 
   if (type === 'google') {
     el.innerHTML = `
-      <p style="font-size:12px;color:#64748b;margin-bottom:12px">
-        Your property will be saved and you'll be redirected to Google to grant calendar access.
-      </p>
-      <div class="form-actions">
-        <button class="btn btn-primary" onclick="saveAndConnectGoogle()">Save &amp; Connect Google Calendar</button>
-        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <div id="google-step-1">
+        <p style="font-size:12px;color:#64748b;margin-bottom:12px">
+          Save your property first, then authorise Google Calendar access in a new tab.
+        </p>
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveAndGetGoogleUrl()">Save &amp; Get Auth Link</button>
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        </div>
+      </div>
+      <div id="google-step-2" style="display:none">
+        <p style="font-size:12px;font-weight:600;margin-bottom:8px">Step 1 — Authorise Google Calendar</p>
+        <p style="font-size:12px;color:#64748b;margin-bottom:10px">
+          Click the link below to open Google's authorisation page in a new tab.
+          After you approve access, Google will redirect to a page that won't load — that's expected.
+        </p>
+        <a id="google-auth-link" href="#" target="_blank" rel="noopener"
+           style="display:inline-block;margin-bottom:16px;font-size:13px;color:#3b82f6">
+          Open Google authorisation &rarr;
+        </a>
+        <p style="font-size:12px;font-weight:600;margin-bottom:4px">Step 2 — Paste the URL</p>
+        <p style="font-size:12px;color:#64748b;margin-bottom:8px">
+          Copy the full URL from your browser's address bar (starting with <code>http://localhost...</code>) and paste it below.
+        </p>
+        <div class="form-group">
+          <input id="google-callback-url" placeholder="http://localhost:3000/auth/google/callback?code=...">
+        </div>
+        <div id="google-complete-error" class="form-error"></div>
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="completeGoogleAuth()">Complete Connection</button>
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        </div>
       </div>`;
   } else if (type === 'icloud') {
     el.innerHTML = `
@@ -186,7 +196,7 @@ async function lookupAddress() {
   }
 }
 
-async function saveAndConnectGoogle() {
+async function saveAndGetGoogleUrl() {
   const label = document.getElementById('prop-label')?.value.trim();
   const uprn = document.getElementById('prop-uprn')?.value.trim();
   if (!label || !uprn) {
@@ -195,9 +205,29 @@ async function saveAndConnectGoogle() {
   }
   try {
     const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'google' });
-    window.location.href = `/auth/google/start/${id}`;
+    const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
+    document.getElementById('google-auth-link').href = authUrl;
+    document.getElementById('google-step-1').style.display = 'none';
+    document.getElementById('google-step-2').style.display = 'block';
+    // Store property id for the complete step
+    document.getElementById('google-step-2').dataset.propertyId = id;
   } catch (err) {
     document.getElementById('form-error').textContent = err.message;
+  }
+}
+
+async function completeGoogleAuth() {
+  const pastedUrl = document.getElementById('google-callback-url')?.value.trim();
+  const errorEl = document.getElementById('google-complete-error');
+  if (!pastedUrl) { errorEl.textContent = 'Paste the URL from your browser first'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('POST', '/api/google/complete', { pastedUrl });
+    closeModal();
+    showToast('Google Calendar connected');
+    await renderPropertiesTable();
+  } catch (err) {
+    errorEl.textContent = err.message;
   }
 }
 
@@ -258,8 +288,20 @@ async function deleteProperty(id, label) {
   }
 }
 
-function reconnectGoogle(id) {
-  window.location.href = `/auth/google/start/${id}`;
+async function reconnectGoogle(id) {
+  openPropertyModal();
+  // Switch directly to step 2 for an existing property
+  document.getElementById('prop-type').value = 'google';
+  renderCalendarFields();
+  try {
+    const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
+    document.getElementById('google-auth-link').href = authUrl;
+    document.getElementById('google-step-1').style.display = 'none';
+    document.getElementById('google-step-2').style.display = 'block';
+    document.getElementById('google-step-2').dataset.propertyId = id;
+  } catch (err) {
+    document.getElementById('form-error').textContent = err.message;
+  }
 }
 
 function escHtml(str) {

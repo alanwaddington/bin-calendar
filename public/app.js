@@ -32,10 +32,6 @@ document.querySelectorAll('.nav-link').forEach(a => {
 });
 
 window.addEventListener('DOMContentLoaded', () => {
-  const params = new URLSearchParams(location.search);
-  if (params.has('success') || params.has('error')) {
-    history.replaceState({}, '', location.pathname + '#properties');
-  }
   const hash = location.hash.replace('#', '') || 'dashboard';
   navigate(hash);
 });

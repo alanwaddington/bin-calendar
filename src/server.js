@@ -73,7 +73,8 @@ app.delete('/api/properties/:id', (req, res) => {
 });
 
 // ── Google OAuth ───────────────────────────────────────────────────────────
-app.get('/auth/google/start/:propertyId', (req, res) => {
+// Returns the Google auth URL for a property (Desktop app OAuth — user pastes callback URL back)
+app.get('/api/google/auth-url/:propertyId', (req, res) => {
   if (!isGoogleConfigured()) return res.status(503).json({ error: 'Google not configured' });
   const nonce = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -82,36 +83,43 @@ app.get('/auth/google/start/:propertyId', (req, res) => {
     .run(nonce, req.params.propertyId, expiresAt);
   db.prepare("DELETE FROM oauth_state WHERE expires_at < datetime('now')").run();
   const state = Buffer.from(JSON.stringify({ property_id: req.params.propertyId, nonce })).toString('base64url');
-  res.redirect(getAuthUrl(state));
+  res.json({ authUrl: getAuthUrl(state) });
 });
 
-app.get('/auth/google/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  let propertyId;
+// Accepts the full callback URL pasted by the user after Google authorization
+app.post('/api/google/complete', async (req, res) => {
+  const { pastedUrl } = req.body;
+  if (!pastedUrl) return res.status(400).json({ error: 'pastedUrl is required' });
   try {
+    const parsed = new URL(pastedUrl);
+    const code = parsed.searchParams.get('code');
+    const state = parsed.searchParams.get('state');
+    const error = parsed.searchParams.get('error');
+
+    if (!state) return res.status(400).json({ error: 'Invalid URL — missing state parameter' });
     const decoded = JSON.parse(Buffer.from(state, 'base64url').toString());
-    propertyId = decoded.property_id;
+    const { property_id, nonce } = decoded;
     const db = getDb();
 
     if (error) {
-      db.prepare('DELETE FROM oauth_state WHERE property_id = ?').run(propertyId);
-      return res.redirect('/properties?error=google_denied');
+      db.prepare('DELETE FROM oauth_state WHERE property_id = ?').run(property_id);
+      return res.status(400).json({ error: 'Google access was denied' });
     }
 
     const row = db.prepare('SELECT * FROM oauth_state WHERE property_id = ? AND nonce = ?')
-      .get(propertyId, decoded.nonce);
+      .get(property_id, nonce);
     if (!row || new Date(row.expires_at) < new Date()) {
-      return res.redirect('/properties?error=oauth_expired');
+      return res.status(400).json({ error: 'OAuth session expired — please start again' });
     }
-    db.prepare('DELETE FROM oauth_state WHERE nonce = ?').run(decoded.nonce);
+    db.prepare('DELETE FROM oauth_state WHERE nonce = ?').run(nonce);
 
     const tokens = await exchangeCode(code);
     db.prepare('UPDATE properties SET credentials = ? WHERE id = ?')
-      .run(encryptJson(tokens), propertyId);
-    res.redirect('/properties?success=google_connected');
+      .run(encryptJson(tokens), property_id);
+    res.json({ ok: true });
   } catch (err) {
-    console.error('OAuth callback error:', err);
-    res.redirect('/properties?error=oauth_failed');
+    console.error('OAuth complete error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
