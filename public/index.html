@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bin-calendar</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sidebar-title">bin-calendar</div>
+      <a href="#dashboard" class="nav-link active" data-view="dashboard">Dashboard</a>
+      <a href="#properties" class="nav-link" data-view="properties">Properties</a>
+      <a href="#logs" class="nav-link" data-view="logs">Logs</a>
+    </nav>
+    <main class="content">
+      <div id="view-dashboard" class="view"></div>
+      <div id="view-properties" class="view hidden"></div>
+      <div id="view-logs" class="view hidden"></div>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+  <script src="/dashboard.js"></script>
+  <script src="/properties.js"></script>
+  <script src="/logs.js"></script>
+</body>
+</html>

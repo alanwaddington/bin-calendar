@@ -1,0 +1,22 @@
+services:
+  bin-calendar:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/bin-calendar:latest
+    container_name: bin-calendar
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3000/auth/google/callback}
+      - GETADDRESS_API_KEY=${GETADDRESS_API_KEY:-}
+      - PORT=${PORT:-3000}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-3000}/health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

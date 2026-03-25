@@ -1,0 +1,17 @@
+{
+  "name": "bin-calendar",
+  "version": "1.0.0",
+  "description": "Sync East Ayrshire bin collection schedules to Google Calendar or iCloud",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "express": "^4.18.3",
+    "googleapis": "^140.0.0",
+    "node-cron": "^3.0.3",
+    "node-ical": "^0.25.6",
+    "tsdav": "^2.0.10"
+  }
+}
