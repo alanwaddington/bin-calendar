@@ -4,7 +4,7 @@ const path = require('path');
 const { initDb, getDb } = require('./db');
 const { runSync } = require('./sync');
 const { startScheduler, getNextSyncDate } = require('./scheduler');
-const { isGoogleConfigured, getAuthUrl, exchangeCode } = require('./google');
+const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require('./google');
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
 const { lookupPostcode, getAddressDetail } = require('./uprn');
@@ -121,6 +121,27 @@ app.post('/api/google/complete', async (req, res) => {
     console.error('OAuth complete error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Returns the list of Google Calendars for a connected property
+app.get('/api/google/calendars/:propertyId', async (req, res) => {
+  const property = getDb().prepare('SELECT * FROM properties WHERE id = ?').get(req.params.propertyId);
+  if (!property) return res.status(404).json({ error: 'Property not found' });
+  if (!property.credentials) return res.status(400).json({ error: 'Property not connected to Google' });
+  try {
+    const calendars = await listCalendars(property);
+    res.json(calendars);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Updates the selected calendar for a property
+app.put('/api/properties/:id/calendar', (req, res) => {
+  const { calendar_id } = req.body;
+  if (!calendar_id) return res.status(400).json({ error: 'calendar_id is required' });
+  getDb().prepare('UPDATE properties SET calendar_id = ? WHERE id = ?').run(calendar_id, req.params.id);
+  res.json({ ok: true });
 });
 
 // ── iCloud ─────────────────────────────────────────────────────────────────

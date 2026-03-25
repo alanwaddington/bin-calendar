@@ -139,6 +139,20 @@ function renderCalendarFields() {
           <button class="btn btn-primary" onclick="completeGoogleAuth()">Complete Connection</button>
           <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         </div>
+      </div>
+      <div id="google-step-3" style="display:none">
+        <p style="font-size:12px;font-weight:600;margin-bottom:8px">Step 3 — Select Calendar</p>
+        <p style="font-size:12px;color:#64748b;margin-bottom:10px">Choose which Google Calendar to sync bin collections into.</p>
+        <div class="form-group">
+          <select id="google-calendar-select" style="width:100%">
+            <option value="">Loading calendars...</option>
+          </select>
+        </div>
+        <div id="google-step-3-error" class="form-error"></div>
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveGoogleCalendar()">Save</button>
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        </div>
       </div>`;
   } else if (type === 'icloud') {
     el.innerHTML = `
@@ -223,6 +237,29 @@ async function completeGoogleAuth() {
   errorEl.textContent = '';
   try {
     await api('POST', '/api/google/complete', { pastedUrl });
+    const propertyId = document.getElementById('google-step-2').dataset.propertyId;
+    document.getElementById('google-step-2').style.display = 'none';
+    document.getElementById('google-step-3').style.display = 'block';
+    document.getElementById('google-step-3').dataset.propertyId = propertyId;
+    // Load calendars
+    const cals = await api('GET', `/api/google/calendars/${propertyId}`);
+    const sel = document.getElementById('google-calendar-select');
+    sel.innerHTML = cals.map(c =>
+      `<option value="${escAttr(c.id)}"${c.primary ? ' selected' : ''}>${escHtml(c.summary)}${c.primary ? ' (default)' : ''}</option>`
+    ).join('');
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function saveGoogleCalendar() {
+  const propertyId = document.getElementById('google-step-3').dataset.propertyId;
+  const calendarId = document.getElementById('google-calendar-select').value;
+  const errorEl = document.getElementById('google-step-3-error');
+  if (!calendarId) { errorEl.textContent = 'Select a calendar'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('PUT', `/api/properties/${propertyId}/calendar`, { calendar_id: calendarId });
     closeModal();
     showToast('Google Calendar connected');
     await renderPropertiesTable();
