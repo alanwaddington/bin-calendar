@@ -40,6 +40,7 @@ async function renderPropertiesTable() {
           ? '<span class="badge badge-success">Connected</span>'
           : '<span class="badge badge-warning">Not connected</span>'}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
           ${!connected && p.calendar_type === 'google'
             ? `<button class="btn btn-sm btn-secondary" onclick="reconnectGoogle(${p.id})">Reconnect</button>`
             : ''}
@@ -309,6 +310,65 @@ async function saveIcloud() {
     });
     closeModal();
     showToast('iCloud calendar connected');
+    await renderPropertiesTable();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function openEditModal(p) {
+  document.getElementById('modal-title').textContent = 'Edit Property';
+  document.getElementById('property-modal').classList.remove('hidden');
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `
+    <div class="form-group">
+      <label>Label</label>
+      <input id="edit-label" value="${escAttr(p.label)}">
+    </div>
+    <div class="form-group">
+      <label>UPRN</label>
+      <input id="edit-uprn" value="${escAttr(p.uprn)}">
+    </div>
+    ${p.connected && p.calendar_type === 'google' ? `
+    <div class="form-group">
+      <label>Calendar</label>
+      <select id="edit-calendar" style="width:100%">
+        <option value="">Loading calendars...</option>
+      </select>
+    </div>` : ''}
+    <div id="edit-error" class="form-error"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveEdit(${p.id}, '${escAttr(p.calendar_type)}', ${!!p.connected})">Save</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </div>`;
+
+  if (p.connected && p.calendar_type === 'google') {
+    try {
+      const cals = await api('GET', `/api/google/calendars/${p.id}`);
+      const sel = document.getElementById('edit-calendar');
+      sel.innerHTML = cals.map(c =>
+        `<option value="${escAttr(c.id)}"${c.id === p.calendar_id ? ' selected' : ''}>${escHtml(c.summary)}${c.primary ? ' (default)' : ''}</option>`
+      ).join('');
+    } catch (err) {
+      document.getElementById('edit-error').textContent = `Could not load calendars: ${err.message}`;
+    }
+  }
+}
+
+async function saveEdit(id, calendarType, connected) {
+  const label = document.getElementById('edit-label')?.value.trim();
+  const uprn = document.getElementById('edit-uprn')?.value.trim();
+  const errorEl = document.getElementById('edit-error');
+  if (!label || !uprn) { errorEl.textContent = 'Label and UPRN are required'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('PUT', `/api/properties/${id}`, { label, uprn });
+    if (connected && calendarType === 'google') {
+      const calendarId = document.getElementById('edit-calendar')?.value;
+      if (calendarId) await api('PUT', `/api/properties/${id}/calendar`, { calendar_id: calendarId });
+    }
+    closeModal();
+    showToast('Property updated');
     await renderPropertiesTable();
   } catch (err) {
     errorEl.textContent = err.message;
