@@ -41,7 +41,7 @@ async function renderPropertiesTable() {
           : '<span class="badge badge-warning">Not connected</span>'}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
-          ${!connected && p.calendar_type === 'google'
+          ${p.calendar_type === 'google'
             ? `<button class="btn btn-sm btn-secondary" onclick="reconnectGoogle(${p.id})">Reconnect</button>`
             : ''}
           <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id}, '${escHtml(p.label)}')">Delete</button>
