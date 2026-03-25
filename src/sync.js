@@ -76,12 +76,21 @@ async function syncProperty(db, runId, property) {
     let added = 0, skipped = 0;
     for (const event of events) {
       if (existingUids.has(event.uid)) { skipped++; continue; }
-      if (property.calendar_type === 'google') {
-        await google.insertEvent(property, event);
-      } else {
-        await icloud.insertEvent(property, event);
+      try {
+        if (property.calendar_type === 'google') {
+          await google.insertEvent(property, event);
+        } else {
+          await icloud.insertEvent(property, event);
+        }
+        added++;
+      } catch (err) {
+        // Treat duplicate UID as a skip rather than a failure
+        if (err.code === 409 || /already exists|duplicate/i.test(err.message)) {
+          skipped++;
+        } else {
+          throw err;
+        }
       }
-      added++;
     }
 
     writeResult(db, runId, property.id, added, skipped, warnings.join('; ') || null, startedAt);
