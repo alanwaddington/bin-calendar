@@ -7,6 +7,7 @@ jest.mock('../../src/icloud');
 jest.mock('../../src/uprn');
 jest.mock('../../src/scheduler');
 jest.mock('../../src/crypto');
+jest.mock('../../src/credential-check');
 
 const { getDb } = require('../../src/db');
 const { runSync } = require('../../src/sync');
@@ -15,6 +16,7 @@ const { fetchCalendars } = require('../../src/icloud');
 const { lookupPostcode, getAddressDetail } = require('../../src/uprn');
 const { getNextSyncDate } = require('../../src/scheduler');
 const { encryptJson } = require('../../src/crypto');
+const { checkSingleCredential } = require('../../src/credential-check');
 
 const { app } = require('../../src/server');
 
@@ -36,6 +38,7 @@ describe('server API', () => {
     isGoogleConfigured.mockReturnValue(false);
     encryptJson.mockReturnValue('encrypted-creds');
     runSync.mockResolvedValue({ status: 200, overallStatus: 'success' });
+    checkSingleCredential.mockResolvedValue('ok');
   });
 
   test('GET /health returns 200 with status and nextSync', async () => {
@@ -414,5 +417,75 @@ describe('server API', () => {
     const res = await request(app).get('/api/uprn/detail?id=/addr/1');
 
     expect(res.status).toBe(400);
+  });
+
+  test('GET /api/properties returns credential_status in response', async () => {
+    mockPrepare.all.mockReturnValue([
+      { id: 1, label: 'Home', uprn: '12345', calendar_type: 'google', connected: 1, credential_status: 'ok' },
+    ]);
+
+    const res = await request(app).get('/api/properties');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toHaveProperty('credential_status');
+  });
+
+  test('GET /api/properties/:id/credential-status returns status when property found', async () => {
+    mockPrepare.get.mockReturnValue({ id: 1, credentials: 'enc', calendar_type: 'google' });
+    checkSingleCredential.mockResolvedValue('ok');
+
+    const res = await request(app).get('/api/properties/1/credential-status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body).toHaveProperty('checkedAt');
+  });
+
+  test('GET /api/properties/:id/credential-status returns 404 if not found', async () => {
+    mockPrepare.get.mockReturnValue(null);
+
+    const res = await request(app).get('/api/properties/999/credential-status');
+
+    expect(res.status).toBe(404);
+  });
+
+  test('GET /api/properties/:id/credential-status returns 400 if no credentials', async () => {
+    mockPrepare.get.mockReturnValue({ id: 1, credentials: null });
+
+    const res = await request(app).get('/api/properties/1/credential-status');
+
+    expect(res.status).toBe(400);
+  });
+
+  test('POST /api/google/complete with valid code resets credential_status to ok', async () => {
+    const state = Buffer.from(JSON.stringify({ property_id: 1, nonce: 'abc' })).toString('base64url');
+    const pastedUrl = `http://localhost:3000/callback?state=${state}&code=test-code`;
+
+    mockPrepare.get.mockReturnValue({ property_id: 1, nonce: 'abc', expires_at: new Date(Date.now() + 600000).toISOString() });
+    exchangeCode.mockResolvedValue({ access_token: 'tok', refresh_token: 'ref' });
+
+    const res = await request(app)
+      .post('/api/google/complete')
+      .send({ pastedUrl });
+
+    expect(res.status).toBe(200);
+    const calls = mockPrepare.run.mock.calls;
+    const statusReset = calls.some(args => Array.from(args).includes('ok'));
+    expect(statusReset).toBe(true);
+  });
+
+  test('POST /api/properties/:id/icloud resets credential_status to ok', async () => {
+    const res = await request(app)
+      .post('/api/properties/1/icloud')
+      .send({
+        apple_id: 'user@icloud.com',
+        app_specific_password: 'pass',
+        calendar_url: 'https://caldav.icloud.com/123',
+      });
+
+    expect(res.status).toBe(200);
+    const calls = mockPrepare.run.mock.calls;
+    const statusReset = calls.some(args => Array.from(args).includes('ok'));
+    expect(statusReset).toBe(true);
   });
 });

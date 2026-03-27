@@ -216,4 +216,117 @@ describe('sync', () => {
 
     expect(result.overallStatus).toBe('success');
   });
+
+  test('runSync_onPropertySuccess_setsCredentialStatusOk', async () => {
+    const property = {
+      id: 1,
+      label: 'Home',
+      uprn: '12345',
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({ events: [], warnings: [] });
+
+    await runSync();
+
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const statusUpdate = calls.find(q => q.includes('credential_status'));
+    expect(statusUpdate).toBeDefined();
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const statusRun = runCalls.find(args => args[0] === 'ok');
+    expect(statusRun).toBeDefined();
+  });
+
+  test('runSync_onAuthError_setsCredentialStatusInvalid', async () => {
+    const property = {
+      id: 1,
+      label: 'Home',
+      uprn: '12345',
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Bin', start: new Date(), end: new Date(), allDay: false, description: '' }],
+      warnings: [],
+    });
+    google.listEvents.mockRejectedValue(new Error('invalid_grant: Token has been expired or revoked'));
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const statusRun = runCalls.find(args => args[0] === 'invalid');
+    expect(statusRun).toBeDefined();
+  });
+
+  test('runSync_onNonAuthError_doesNotChangeCredentialStatus', async () => {
+    const property = {
+      id: 1,
+      label: 'Home',
+      uprn: '12345',
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockRejectedValue(new Error('ICS fetch failed after 3 attempts: ETIMEDOUT'));
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const invalidRun = runCalls.find(args => args[0] === 'invalid');
+    const okRun = runCalls.find(args => args[0] === 'ok');
+    expect(invalidRun).toBeUndefined();
+    expect(okRun).toBeUndefined();
+  });
+
+  test('runSync_onError401ContainingNonAuthText_doesNotSetInvalid', async () => {
+    // Ensure bare '401' (e.g. "line 401") does NOT trigger auth detection
+    const property = {
+      id: 1,
+      label: 'Home',
+      uprn: '12345',
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Bin', start: new Date(), end: new Date(), allDay: false, description: '' }],
+      warnings: [],
+    });
+    google.listEvents.mockRejectedValue(new Error('Parse error at position 401'));
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const invalidRun = runCalls.find(args => args[0] === 'invalid');
+    expect(invalidRun).toBeUndefined();
+  });
+
+  test('runSync_onHttp401Error_setsCredentialStatusInvalid', async () => {
+    const property = {
+      id: 1,
+      label: 'Home',
+      uprn: '12345',
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Bin', start: new Date(), end: new Date(), allDay: false, description: '' }],
+      warnings: [],
+    });
+    google.listEvents.mockRejectedValue(new Error('Request failed with HTTP 401: Unauthorized'));
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const statusRun = runCalls.find(args => args[0] === 'invalid');
+    expect(statusRun).toBeDefined();
+  });
 });

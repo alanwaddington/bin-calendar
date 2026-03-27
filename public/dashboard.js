@@ -52,15 +52,25 @@ async function renderDashboard() {
     cards.innerHTML = properties.map(p => {
       const calLabel = p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud';
       const connected = !!p.connected;
+      const credInvalid = connected && p.credential_status === 'invalid';
+      const checkedAt = p.credential_checked_at
+        ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+        : null;
       return `<div class="card">
         <div class="card-label">${calLabel}</div>
         <div class="card-value">${escHtml(p.label)}</div>
         <div style="margin-top:6px;font-size:12px;color:#64748b">UPRN: ${escHtml(p.uprn)}</div>
         <div style="margin-top:8px">
-          ${connected
-            ? '<span class="badge badge-success">Connected</span>'
-            : '<span class="badge badge-warning">Not connected</span>'}
+          ${credInvalid
+            ? '<span class="badge badge-error">Credentials expired</span>'
+            : connected
+              ? '<span class="badge badge-success">Connected</span>'
+              : '<span class="badge badge-warning">Not connected</span>'}
+          ${checkedAt ? `<span style="display:block;margin-top:4px;font-size:11px;color:#94a3b8">Checked ${escHtml(checkedAt)}</span>` : ''}
         </div>
+        ${credInvalid
+          ? `<div style="margin-top:8px"><button class="btn btn-sm btn-secondary" onclick="navigate('properties')">Reconnect</button></div>`
+          : ''}
       </div>`;
     }).join('');
   } catch (err) {

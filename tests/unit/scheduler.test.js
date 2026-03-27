@@ -4,8 +4,12 @@ jest.mock('node-cron', () => ({
 jest.mock('../../src/sync', () => ({
   runSync: jest.fn(),
 }));
+jest.mock('../../src/credential-check', () => ({
+  checkAllCredentials: jest.fn(),
+}));
 
 const cron = require('node-cron');
+const { checkAllCredentials } = require('../../src/credential-check');
 const { startScheduler, getNextSyncDate, stopScheduler } = require('../../src/scheduler');
 
 describe('scheduler', () => {
@@ -66,5 +70,49 @@ describe('scheduler', () => {
     logSpy.mockRestore();
 
     expect(runSync).toHaveBeenCalled();
+  });
+
+  test('startScheduler_schedulesWeeklyCredentialCheck', () => {
+    startScheduler();
+
+    expect(cron.schedule).toHaveBeenCalledWith('0 0 * * 0', expect.any(Function));
+  });
+
+  test('stopScheduler_stopsBothCronJobs', () => {
+    startScheduler();
+    stopScheduler();
+
+    const mockTask1 = cron.schedule.mock.results[0].value;
+    const mockTask2 = cron.schedule.mock.results[1].value;
+    expect(mockTask1.stop).toHaveBeenCalled();
+    expect(mockTask2.stop).toHaveBeenCalled();
+  });
+
+  test('weeklyCredentialCallback_onSuccess_logsResult', async () => {
+    checkAllCredentials.mockResolvedValue(undefined);
+
+    startScheduler();
+
+    const callback = cron.schedule.mock.calls[1][1];
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    await callback();
+    consoleSpy.mockRestore();
+
+    expect(checkAllCredentials).toHaveBeenCalled();
+  });
+
+  test('weeklyCredentialCallback_onError_logsError', async () => {
+    checkAllCredentials.mockRejectedValue(new Error('Check failed'));
+
+    startScheduler();
+
+    const callback = cron.schedule.mock.calls[1][1];
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    await callback();
+    consoleSpy.mockRestore();
+    logSpy.mockRestore();
+
+    expect(checkAllCredentials).toHaveBeenCalled();
   });
 });

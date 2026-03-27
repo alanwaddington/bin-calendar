@@ -64,4 +64,15 @@ function toIcsDate(date) {
   return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
 
-module.exports = { fetchCalendars, listEventUids, insertEvent };
+async function checkCredentials(property) {
+  if (!property.credentials) return 'unknown';
+  try {
+    const creds = decryptJson(property.credentials);
+    await createClient(creds);
+    return 'ok';
+  } catch {
+    return 'invalid';
+  }
+}
+
+module.exports = { fetchCalendars, listEventUids, insertEvent, checkCredentials };

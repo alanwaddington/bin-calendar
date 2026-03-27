@@ -32,18 +32,27 @@ async function renderPropertiesTable() {
     <thead><tr><th>Label</th><th>UPRN</th><th>Calendar</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>${properties.map(p => {
       const connected = !!p.connected;
+      const credInvalid = connected && p.credential_status === 'invalid';
+      const checkedAt = p.credential_checked_at
+        ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+        : null;
       return `<tr>
         <td>${escHtml(p.label)}</td>
         <td><code style="font-size:12px">${escHtml(p.uprn)}</code></td>
         <td>${p.calendar_type === 'google' ? 'Google' : 'iCloud'}</td>
-        <td>${connected
-          ? '<span class="badge badge-success">Connected</span>'
-          : '<span class="badge badge-warning">Not connected</span>'}</td>
+        <td>${credInvalid
+          ? '<span class="badge badge-error">Credentials expired</span>'
+          : connected
+            ? '<span class="badge badge-success">Connected</span>'
+            : '<span class="badge badge-warning">Not connected</span>'}
+          ${checkedAt ? `<br><span style="font-size:11px;color:#94a3b8">Checked ${escHtml(checkedAt)}</span>` : ''}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
           ${p.calendar_type === 'google'
             ? `<button class="btn btn-sm btn-secondary" onclick="reconnectGoogle(${p.id})">Reconnect</button>`
-            : ''}
+            : credInvalid
+              ? `<button class="btn btn-sm btn-secondary" onclick="reconnectIcloud(${p.id})">Reconnect</button>`
+              : ''}
           <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id}, '${escHtml(p.label)}')">Delete</button>
         </td>
       </tr>`;
@@ -398,6 +407,86 @@ async function reconnectGoogle(id) {
     document.getElementById('google-step-2').dataset.propertyId = id;
   } catch (err) {
     document.getElementById('form-error').textContent = err.message;
+  }
+}
+
+async function reconnectIcloud(id) {
+  document.getElementById('modal-title').textContent = 'Reconnect iCloud';
+  document.getElementById('property-modal').classList.remove('hidden');
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `
+    <p style="font-size:12px;color:#64748b;margin-bottom:12px">
+      Re-enter your Apple ID and app-specific password to restore the calendar connection.
+    </p>
+    <div class="form-group">
+      <label>Apple ID</label>
+      <input id="reconnect-apple-id" type="email" placeholder="you@example.com">
+    </div>
+    <div class="form-group">
+      <label>
+        App-specific password
+        <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noopener"
+           style="font-weight:normal;font-size:11px;margin-left:6px">Generate at appleid.apple.com</a>
+      </label>
+      <input id="reconnect-apple-pass" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
+    </div>
+    <div class="form-group">
+      <button class="btn btn-secondary" type="button" onclick="fetchReconnectIcloudCalendars()">Fetch Calendars</button>
+      <div id="reconnect-calendar-select" style="margin-top:8px"></div>
+    </div>
+    <div id="reconnect-error" class="form-error"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveReconnectIcloud(${id})">Save</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </div>`;
+}
+
+async function fetchReconnectIcloudCalendars() {
+  const appleId = document.getElementById('reconnect-apple-id')?.value.trim();
+  const pass = document.getElementById('reconnect-apple-pass')?.value.trim();
+  const el = document.getElementById('reconnect-calendar-select');
+  if (!appleId || !pass) {
+    el.innerHTML = '<span style="color:#dc2626;font-size:12px">Enter Apple ID and password first</span>';
+    return;
+  }
+  el.innerHTML = '<span style="font-size:12px;color:#64748b">Fetching calendars...</span>';
+  try {
+    const cals = await api('POST', '/api/icloud/calendars', { apple_id: appleId, app_specific_password: pass });
+    if (cals.length === 0) {
+      el.innerHTML = '<span style="font-size:12px;color:#dc2626">No calendars found</span>';
+      return;
+    }
+    el.innerHTML = `<label style="margin-top:8px">Select calendar</label>
+      <select id="reconnect-cal-url" style="width:100%;margin-top:4px">
+        <option value="">Select...</option>
+        ${cals.map(c => `<option value="${escAttr(c.url)}">${escHtml(c.displayName)}</option>`).join('')}
+      </select>`;
+  } catch (err) {
+    el.innerHTML = `<span style="color:#dc2626;font-size:12px">Error: ${escHtml(err.message)}</span>`;
+  }
+}
+
+async function saveReconnectIcloud(id) {
+  const appleId = document.getElementById('reconnect-apple-id')?.value.trim();
+  const pass = document.getElementById('reconnect-apple-pass')?.value.trim();
+  const calUrl = document.getElementById('reconnect-cal-url')?.value;
+  const errorEl = document.getElementById('reconnect-error');
+  if (!appleId || !pass || !calUrl) {
+    errorEl.textContent = 'All fields are required — make sure you have fetched and selected a calendar';
+    return;
+  }
+  errorEl.textContent = '';
+  try {
+    await api('POST', `/api/properties/${id}/icloud`, {
+      apple_id: appleId,
+      app_specific_password: pass,
+      calendar_url: calUrl,
+    });
+    closeModal();
+    showToast('iCloud calendar reconnected');
+    await renderPropertiesTable();
+  } catch (err) {
+    errorEl.textContent = err.message;
   }
 }
 

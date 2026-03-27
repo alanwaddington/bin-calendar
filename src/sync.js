@@ -51,12 +51,28 @@ async function runSync() {
   }
 }
 
+const AUTH_ERROR_PATTERNS = [
+  'invalid_grant', 'http 401', 'http 403', 'unauthorized', 'forbidden',
+  'token has been expired or revoked', 'auth failed', 'authentication failed',
+];
+
+function isAuthError(err) {
+  const msg = err.message.toLowerCase();
+  return AUTH_ERROR_PATTERNS.some(p => msg.includes(p));
+}
+
+function updateCredentialStatus(db, propertyId, status) {
+  db.prepare("UPDATE properties SET credential_status = ?, credential_checked_at = datetime('now') WHERE id = ?")
+    .run(status, propertyId);
+}
+
 async function syncProperty(db, runId, property) {
   const startedAt = new Date().toISOString();
   try {
     const { events, warnings } = await fetchIcs(property.uprn);
 
     if (events.length === 0) {
+      updateCredentialStatus(db, property.id, 'ok');
       writeResult(db, runId, property.id, 0, 0, warnings.join('; ') || null, startedAt);
       return { propertyId: property.id };
     }
@@ -84,9 +100,13 @@ async function syncProperty(db, runId, property) {
       added++;
     }
 
+    updateCredentialStatus(db, property.id, 'ok');
     writeResult(db, runId, property.id, added, skipped, warnings.join('; ') || null, startedAt);
     return { propertyId: property.id };
   } catch (err) {
+    if (isAuthError(err)) {
+      updateCredentialStatus(db, property.id, 'invalid');
+    }
     writeResult(db, runId, property.id, 0, 0, err.message, startedAt);
     return { propertyId: property.id, error: err.message };
   }
