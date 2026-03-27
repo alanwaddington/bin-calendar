@@ -52,7 +52,7 @@ async function runSync() {
 }
 
 const AUTH_ERROR_PATTERNS = [
-  'invalid_grant', '401', '403', 'unauthorized', 'forbidden',
+  'invalid_grant', 'http 401', 'http 403', 'unauthorized', 'forbidden',
   'token has been expired or revoked', 'auth failed', 'authentication failed',
 ];
 

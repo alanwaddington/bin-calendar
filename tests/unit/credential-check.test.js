@@ -91,6 +91,28 @@ describe('checkAllCredentials', () => {
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
+
+  test('checkAllCredentials_whenPropertyDeletedDuringCheck_continuesWithoutCrash', async () => {
+    // Simulates a property being deleted between the SELECT and the UPDATE:
+    // the DB run() for the first property throws (e.g. foreign-key no longer exists),
+    // but the second property should still be checked successfully.
+    mockPrepare.all.mockReturnValue([
+      { id: 1, calendar_type: 'google', credentials: 'enc' },
+      { id: 2, calendar_type: 'icloud', credentials: 'enc' },
+    ]);
+    google.checkCredentials.mockResolvedValue('ok');
+    icloud.checkCredentials.mockResolvedValue('ok');
+    // First run() call (property 1 DB update) throws; second (property 2) succeeds
+    mockPrepare.run
+      .mockImplementationOnce(() => { throw new Error('no such row'); })
+      .mockImplementation(() => {});
+
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    await expect(checkAllCredentials()).resolves.toBeUndefined();
+    expect(consoleSpy).toHaveBeenCalled();
+    expect(icloud.checkCredentials).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
 });
 
 describe('checkSingleCredential', () => {

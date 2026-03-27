@@ -33,6 +33,9 @@ async function renderPropertiesTable() {
     <tbody>${properties.map(p => {
       const connected = !!p.connected;
       const credInvalid = connected && p.credential_status === 'invalid';
+      const checkedAt = p.credential_checked_at
+        ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+        : null;
       return `<tr>
         <td>${escHtml(p.label)}</td>
         <td><code style="font-size:12px">${escHtml(p.uprn)}</code></td>
@@ -41,7 +44,8 @@ async function renderPropertiesTable() {
           ? '<span class="badge badge-error">Credentials expired</span>'
           : connected
             ? '<span class="badge badge-success">Connected</span>'
-            : '<span class="badge badge-warning">Not connected</span>'}</td>
+            : '<span class="badge badge-warning">Not connected</span>'}
+          ${checkedAt ? `<br><span style="font-size:11px;color:#94a3b8">Checked ${escHtml(checkedAt)}</span>` : ''}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
           ${p.calendar_type === 'google'
