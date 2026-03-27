@@ -139,4 +139,48 @@ describe('google', () => {
       { id: 'primary', summary: 'My Calendar', primary: true },
     ]);
   });
+
+  test('getAuthenticatedClient_refreshesExpiredToken', async () => {
+    // Set credentials with expired token
+    decryptJson.mockReturnValue({
+      access_token: 'old-token',
+      refresh_token: 'ref-token',
+      expiry_date: Date.now() - 120000, // expired 2 minutes ago
+    });
+
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'primary' };
+    const event = {
+      uid: 'evt-refresh',
+      summary: 'Test',
+      start: new Date('2026-04-01'),
+      end: new Date('2026-04-02'),
+      description: '',
+      allDay: true,
+    };
+
+    // The refreshAccessToken mock on OAuth2 instance needs to return credentials
+    const { google: gapis } = require('googleapis');
+    const instance = new gapis.auth.OAuth2();
+    instance.refreshAccessToken.mockResolvedValue({
+      credentials: { access_token: 'new-token', expiry_date: Date.now() + 3600000 },
+    });
+
+    await insertEvent(property, event);
+
+    // Verify refreshAccessToken was called
+    expect(instance.refreshAccessToken).toHaveBeenCalled();
+  });
+
+  test('exchangeCode_returnsTokens', async () => {
+    const { exchangeCode } = require('../../src/google');
+    const tokens = await exchangeCode('test-code');
+    expect(tokens).toEqual({ access_token: 'tok' });
+  });
+
+  test('listEvents_returnsEmptyArray', async () => {
+    const { listEvents } = require('../../src/google');
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'primary' };
+    const result = await listEvents(property, new Date('2026-04-01'), new Date('2026-04-30'));
+    expect(result).toEqual([]);
+  });
 });

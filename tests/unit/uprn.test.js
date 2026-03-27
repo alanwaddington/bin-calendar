@@ -68,4 +68,38 @@ describe('uprn', () => {
 
     await expect(lookupPostcode('KA1 1AA')).rejects.toThrow('Address lookup timed out');
   });
+
+  test('lookupPostcode_whenHttpError_throwsError', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    });
+
+    await expect(lookupPostcode('KA1 1AA')).rejects.toThrow('HTTP 500');
+  });
+
+  test('getAddressDetail_whenApiKeyMissing_throwsError', async () => {
+    delete process.env.GETADDRESS_API_KEY;
+
+    await expect(getAddressDetail('/addr/123')).rejects.toThrow('GETADDRESS_API_KEY not configured');
+  });
+
+  test('getAddressDetail_whenHttpError_throwsError', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    });
+
+    await expect(getAddressDetail('/addr/123')).rejects.toThrow('HTTP 500');
+  });
+
+  test('getAddressDetail_whenFetchAborts_throwsTimeoutError', async () => {
+    global.fetch = jest.fn().mockImplementation(() => {
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      throw err;
+    });
+
+    await expect(getAddressDetail('/addr/123')).rejects.toThrow('Address detail lookup timed out');
+  });
 });

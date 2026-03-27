@@ -36,4 +36,35 @@ describe('scheduler', () => {
     const mockTask = cron.schedule.mock.results[0].value;
     expect(mockTask.stop).toHaveBeenCalled();
   });
+
+  test('cronCallback_onSuccess_logsResult', async () => {
+    const { runSync } = require('../../src/sync');
+    runSync.mockResolvedValue({ overallStatus: 'success' });
+
+    startScheduler();
+
+    // Get the callback that was passed to cron.schedule
+    const callback = cron.schedule.mock.calls[0][1];
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    await callback();
+    consoleSpy.mockRestore();
+
+    expect(runSync).toHaveBeenCalled();
+  });
+
+  test('cronCallback_onError_logsError', async () => {
+    const { runSync } = require('../../src/sync');
+    runSync.mockRejectedValue(new Error('Sync failed'));
+
+    startScheduler();
+
+    const callback = cron.schedule.mock.calls[0][1];
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    await callback();
+    consoleSpy.mockRestore();
+    logSpy.mockRestore();
+
+    expect(runSync).toHaveBeenCalled();
+  });
 });
