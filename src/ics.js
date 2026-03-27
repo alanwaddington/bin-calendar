@@ -18,9 +18,14 @@ async function fetchWithRetry(uprn) {
         signal: controller.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(`HTTP ${res.status}`);
+        if (res.status >= 400 && res.status < 500) throw Object.assign(err, { fatal: true });
+        throw err;
+      }
       return await res.text();
     } catch (err) {
+      if (err.fatal) throw err;
       lastError = err;
     }
   }

@@ -53,12 +53,12 @@ describe('server API', () => {
     expect(Array.isArray(res.body)).toBe(true);
   });
 
-  test('POST /api/properties with valid body returns 200 with id', async () => {
+  test('POST /api/properties with valid body returns 201 with id', async () => {
     const res = await request(app)
       .post('/api/properties')
       .send({ label: 'Home', uprn: '12345', calendar_type: 'google' });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.id).toBeDefined();
   });
 

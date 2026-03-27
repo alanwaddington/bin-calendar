@@ -145,7 +145,7 @@ describe('fetchIcs', () => {
     expect(global.fetch).toHaveBeenCalledTimes(3);
   });
 
-  test('fetchIcs_whenHttpError_retriesAndThrows', async () => {
+  test('fetchIcs_whenServerError_retriesAndThrows', async () => {
     jest.useFakeTimers({ advanceTimers: true });
 
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
@@ -153,6 +153,14 @@ describe('fetchIcs', () => {
 
     await expect(fetchIcs('12345')).rejects.toThrow('ICS fetch failed after 3 attempts');
     expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  test('fetchIcs_whenClientError_throwsImmediatelyWithoutRetry', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 });
+    ical.sync.parseICS.mockReturnValue({});
+
+    await expect(fetchIcs('12345')).rejects.toThrow('HTTP 404');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
   test('fetchIcs_whenSuccessful_returnsEvents', async () => {

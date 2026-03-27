@@ -46,7 +46,7 @@ app.post('/api/properties', (req, res) => {
   const result = getDb().prepare(
     'INSERT INTO properties (label, uprn, calendar_type, calendar_id) VALUES (?, ?, ?, ?)'
   ).run(label, uprn, calendar_type, calendar_type === 'google' ? 'primary' : null);
-  res.json({ id: result.lastInsertRowid });
+  res.status(201).json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/properties/:id', (req, res) => {
