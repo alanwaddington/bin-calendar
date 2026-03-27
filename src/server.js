@@ -8,6 +8,7 @@ const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require(
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
 const { lookupPostcode, getAddressDetail } = require('./uprn');
+const { checkSingleCredential } = require('./credential-check');
 
 const app = express();
 app.use(express.json());
@@ -35,7 +36,7 @@ app.get('/api/config', (req, res) => {
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
   const rows = getDb().prepare(
-    'SELECT id, label, uprn, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected FROM properties'
+    'SELECT id, label, uprn, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
   ).all();
   res.json(rows);
 });
@@ -59,6 +60,18 @@ app.put('/api/properties/:id', (req, res) => {
 app.delete('/api/properties/:id', (req, res) => {
   getDb().prepare('DELETE FROM properties WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
+});
+
+app.get('/api/properties/:id/credential-status', async (req, res) => {
+  const property = getDb().prepare('SELECT * FROM properties WHERE id = ?').get(req.params.id);
+  if (!property) return res.status(404).json({ error: 'Property not found' });
+  if (!property.credentials) return res.status(400).json({ error: 'Property has no credentials' });
+  try {
+    const status = await checkSingleCredential(property);
+    res.json({ status, checkedAt: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Google OAuth ───────────────────────────────────────────────────────────
@@ -103,8 +116,8 @@ app.post('/api/google/complete', async (req, res) => {
     db.prepare('DELETE FROM oauth_state WHERE nonce = ?').run(nonce);
 
     const tokens = await exchangeCode(code);
-    db.prepare('UPDATE properties SET credentials = ? WHERE id = ?')
-      .run(encryptJson(tokens), property_id);
+    db.prepare('UPDATE properties SET credentials = ?, credential_status = ? WHERE id = ?')
+      .run(encryptJson(tokens), 'ok', property_id);
     res.json({ ok: true });
   } catch (err) {
     console.error('OAuth complete error:', err);
@@ -151,8 +164,8 @@ app.post('/api/properties/:id/icloud', (req, res) => {
     return res.status(400).json({ error: 'Missing fields' });
   }
   const creds = encryptJson({ apple_id, app_specific_password });
-  getDb().prepare('UPDATE properties SET credentials = ?, calendar_id = ? WHERE id = ?')
-    .run(creds, calendar_url, req.params.id);
+  getDb().prepare('UPDATE properties SET credentials = ?, calendar_id = ?, credential_status = ? WHERE id = ?')
+    .run(creds, calendar_url, 'ok', req.params.id);
   res.json({ ok: true });
 });
 
