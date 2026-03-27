@@ -1,0 +1,80 @@
+const STANDARD_EVENT = [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//Test//EN',
+  'BEGIN:VEVENT',
+  'UID:evt-001@test',
+  'SUMMARY:Blue Bin Collection',
+  'DTSTART:20260401T070000Z',
+  'DTEND:20260401T080000Z',
+  'DESCRIPTION:Recycling collection',
+  'END:VEVENT',
+  'END:VCALENDAR',
+].join('\r\n');
+
+const ALL_DAY_EVENT = [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//Test//EN',
+  'BEGIN:VEVENT',
+  'UID:evt-002@test',
+  'SUMMARY:Green Bin Collection',
+  'DTSTART;VALUE=DATE:20260401',
+  'DTEND;VALUE=DATE:20260402',
+  'DESCRIPTION:Garden waste',
+  'END:VEVENT',
+  'END:VCALENDAR',
+].join('\r\n');
+
+const PARAMETERISED_SUMMARY = [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//Test//EN',
+  'BEGIN:VEVENT',
+  'UID:evt-003@test',
+  'SUMMARY;LANGUAGE=en-gb:Garden Waste',
+  'DTSTART;VALUE=DATE:20260401',
+  'DTEND;VALUE=DATE:20260402',
+  'END:VEVENT',
+  'END:VCALENDAR',
+].join('\r\n');
+
+const MISSING_SUMMARY = [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//Test//EN',
+  'BEGIN:VEVENT',
+  'UID:evt-004@test',
+  'DTSTART:20260401T070000Z',
+  'DTEND:20260401T080000Z',
+  'END:VEVENT',
+  'END:VCALENDAR',
+].join('\r\n');
+
+const EMPTY_CALENDAR = [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//Test//EN',
+  'END:VCALENDAR',
+].join('\r\n');
+
+const MISSING_UID = [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//Test//EN',
+  'BEGIN:VEVENT',
+  'SUMMARY:Brown Bin Collection',
+  'DTSTART:20260401T070000Z',
+  'DTEND:20260401T080000Z',
+  'END:VEVENT',
+  'END:VCALENDAR',
+].join('\r\n');
+
+module.exports = {
+  STANDARD_EVENT,
+  ALL_DAY_EVENT,
+  PARAMETERISED_SUMMARY,
+  MISSING_SUMMARY,
+  EMPTY_CALENDAR,
+  MISSING_UID,
+};
