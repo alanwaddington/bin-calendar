@@ -1,10 +1,12 @@
 const cron = require('node-cron');
 const { runSync } = require('./sync');
+const { checkAllCredentials } = require('./credential-check');
 
-let task;
+let syncTask;
+let credentialTask;
 
 function startScheduler() {
-  task = cron.schedule('0 0 1 * *', async () => {
+  syncTask = cron.schedule('0 0 1 * *', async () => {
     console.log('Scheduled sync starting...');
     try {
       const result = await runSync();
@@ -13,6 +15,17 @@ function startScheduler() {
       console.error('Scheduled sync error:', err.message);
     }
   });
+
+  credentialTask = cron.schedule('0 0 * * 0', async () => {
+    console.log('Weekly credential check starting...');
+    try {
+      await checkAllCredentials();
+      console.log('Weekly credential check complete');
+    } catch (err) {
+      console.error('Weekly credential check error:', err.message);
+    }
+  });
+
   console.log('Scheduler started — next sync on 1st of next month at 00:00');
 }
 
@@ -23,7 +36,8 @@ function getNextSyncDate() {
 }
 
 function stopScheduler() {
-  if (task) task.stop();
+  if (syncTask) syncTask.stop();
+  if (credentialTask) credentialTask.stop();
 }
 
 module.exports = { startScheduler, getNextSyncDate, stopScheduler };
