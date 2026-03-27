@@ -9,17 +9,6 @@ const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
 const { lookupPostcode, getAddressDetail } = require('./uprn');
 
-// ── Startup validation ─────────────────────────────────────────────────────
-const encKey = process.env.ENCRYPTION_KEY;
-if (!encKey || !/^[0-9a-f]{64}$/i.test(encKey)) {
-  console.error('FATAL: ENCRYPTION_KEY must be a 64-character hex string. Exiting.');
-  process.exit(1);
-}
-
-// ── Init ───────────────────────────────────────────────────────────────────
-initDb();
-startScheduler();
-
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -57,7 +46,7 @@ app.post('/api/properties', (req, res) => {
   const result = getDb().prepare(
     'INSERT INTO properties (label, uprn, calendar_type, calendar_id) VALUES (?, ?, ?, ?)'
   ).run(label, uprn, calendar_type, calendar_type === 'google' ? 'primary' : null);
-  res.json({ id: result.lastInsertRowid });
+  res.status(201).json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/properties/:id', (req, res) => {
@@ -222,7 +211,16 @@ app.get('/api/uprn/detail', async (req, res) => {
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT || '3000', 10);
-app.listen(PORT, () => console.log(`bin-calendar running on port ${PORT}`));
+if (require.main === module) {
+  const encKey = process.env.ENCRYPTION_KEY;
+  if (!encKey || !/^[0-9a-f]{64}$/i.test(encKey)) {
+    console.error('FATAL: ENCRYPTION_KEY must be a 64-character hex string. Exiting.');
+    process.exit(1);
+  }
+  initDb();
+  startScheduler();
+  const PORT = parseInt(process.env.PORT || '3000', 10);
+  app.listen(PORT, () => console.log(`bin-calendar running on port ${PORT}`));
+}
 
-module.exports = app;
+module.exports = { app };
