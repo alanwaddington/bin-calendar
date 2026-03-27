@@ -195,6 +195,22 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 ---
 
+### Step 4b: Create credential status migration
+
+**What:** Add `credential_status` and `credential_checked_at` columns to the `properties` table.
+**File:** `src/migrations/002.sql` (create)
+**Change:**
+```sql
+ALTER TABLE properties ADD COLUMN credential_status TEXT NOT NULL DEFAULT 'unknown'
+  CHECK(credential_status IN ('ok', 'invalid', 'unknown'));
+ALTER TABLE properties ADD COLUMN credential_checked_at DATETIME;
+```
+
+**Verify:** File exists at `src/migrations/002.sql`. Applied automatically by `db.js` on startup after `001.sql`.
+**Depends on:** Step 4
+
+---
+
 ### Step 5: Create database module
 
 **What:** Open the SQLite connection, run pending migrations on startup, and expose helper functions used across the app.
@@ -641,12 +657,28 @@ async function runSync() {
   }
 }
 
+const AUTH_ERROR_PATTERNS = [
+  'invalid_grant', 'http 401', 'http 403', 'unauthorized', 'forbidden',
+  'token has been expired or revoked', 'auth failed', 'authentication failed',
+];
+
+function isAuthError(err) {
+  const msg = err.message.toLowerCase();
+  return AUTH_ERROR_PATTERNS.some(p => msg.includes(p));
+}
+
+function updateCredentialStatus(db, propertyId, status) {
+  db.prepare("UPDATE properties SET credential_status = ?, credential_checked_at = datetime('now') WHERE id = ?")
+    .run(status, propertyId);
+}
+
 async function syncProperty(db, runId, property) {
   const startedAt = new Date().toISOString();
   try {
     const { events, warnings } = await fetchIcs(property.uprn);
 
     if (events.length === 0) {
+      updateCredentialStatus(db, property.id, 'ok');
       writeResult(db, runId, property.id, 0, 0, warnings.join('; ') || null, startedAt);
       return { propertyId: property.id };
     }
@@ -675,9 +707,13 @@ async function syncProperty(db, runId, property) {
       added++;
     }
 
+    updateCredentialStatus(db, property.id, 'ok');
     writeResult(db, runId, property.id, added, skipped, warnings.join('; ') || null, startedAt);
     return { propertyId: property.id };
   } catch (err) {
+    if (isAuthError(err)) {
+      updateCredentialStatus(db, property.id, 'invalid');
+    }
     writeResult(db, runId, property.id, 0, 0, err.message, startedAt);
     return { propertyId: property.id, error: err.message };
   }
@@ -702,19 +738,67 @@ module.exports = { runSync };
 
 ---
 
+### Step 10b: Create credential check module
+
+**What:** Weekly background credential verification. Iterates all properties with credentials, calls provider-specific `checkCredentials`, and persists the result.
+**File:** `src/credential-check.js` (create)
+**Change:**
+```js
+const { getDb } = require('./db');
+const google = require('./google');
+const icloud = require('./icloud');
+
+async function checkAllCredentials() {
+  const db = getDb();
+  const properties = db.prepare(
+    'SELECT * FROM properties WHERE credentials IS NOT NULL'
+  ).all();
+
+  for (const property of properties) {
+    try {
+      const status = await checkSingleCredential(property);
+      console.log(`Credential check: property ${property.id} → ${status}`);
+    } catch (err) {
+      console.error(`Credential check error for property ${property.id}:`, err.message);
+    }
+  }
+}
+
+async function checkSingleCredential(property) {
+  const status = property.calendar_type === 'google'
+    ? await google.checkCredentials(property)
+    : await icloud.checkCredentials(property);
+
+  getDb()
+    .prepare("UPDATE properties SET credential_status = ?, credential_checked_at = datetime('now') WHERE id = ?")
+    .run(status, property.id);
+
+  return status;
+}
+
+module.exports = { checkAllCredentials, checkSingleCredential };
+```
+
+**Verify:** Module loads without error. `checkAllCredentials` can be called manually without crashing when no properties exist.
+**Depends on:** Steps 5, 8, 9
+
+---
+
 ### Step 11: Create scheduler module
 
-**What:** Configure `node-cron` to fire `runSync` at 00:00 on the 1st of each month.
+**What:** Configure `node-cron` to fire `runSync` at 00:00 on the 1st of each month, and `checkAllCredentials` every Sunday at 00:00.
 **File:** `src/scheduler.js` (create)
 **Change:**
 ```js
 const cron = require('node-cron');
 const { runSync } = require('./sync');
+const { checkAllCredentials } = require('./credential-check');
 
-let task;
+let syncTask;
+let credentialTask;
 
 function startScheduler() {
-  task = cron.schedule('0 0 1 * *', async () => {
+  syncTask = cron.schedule('0 0 1 * *', async () => {
     console.log('Scheduled sync starting...');
     try {
       const result = await runSync();
@@ -723,6 +807,17 @@ function startScheduler() {
       console.error('Scheduled sync error:', err.message);
     }
   });
+
+  credentialTask = cron.schedule('0 0 * * 0', async () => {
+    console.log('Weekly credential check starting...');
+    try {
+      await checkAllCredentials();
+      console.log('Weekly credential check complete');
+    } catch (err) {
+      console.error('Weekly credential check error:', err.message);
+    }
+  });
+
   console.log('Scheduler started — next sync on 1st of next month at 00:00');
 }
 
@@ -733,14 +828,15 @@ function getNextSyncDate() {
 }
 
 function stopScheduler() {
-  if (task) task.stop();
+  if (syncTask) syncTask.stop();
+  if (credentialTask) credentialTask.stop();
 }
 
 module.exports = { startScheduler, getNextSyncDate, stopScheduler };
 ```
 
 **Verify:** Module loads: `node -e "const s = require('./src/scheduler'); console.log(s.getNextSyncDate())"` — prints the 1st of next month in ISO format.
-**Depends on:** Steps 1, 10
+**Depends on:** Steps 1, 10, 10b
 
 ---
 
@@ -760,6 +856,7 @@ const { isGoogleConfigured, getAuthUrl, exchangeCode } = require('./google');
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
 const { lookupPostcode, getAddressDetail } = require('./uprn');
+const { checkSingleCredential } = require('./credential-check');
 
 // ── Startup validation ─────────────────────────────────────────────────────
 const encKey = process.env.ENCRYPTION_KEY;
@@ -789,8 +886,22 @@ app.get('/health', (req, res) => {
 
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
-  const rows = getDb().prepare('SELECT id, label, uprn, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected FROM properties').all();
+  const rows = getDb().prepare(
+    'SELECT id, label, uprn, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
+  ).all();
   res.json(rows);
+});
+
+app.get('/api/properties/:id/credential-status', async (req, res) => {
+  const property = getDb().prepare('SELECT * FROM properties WHERE id = ?').get(req.params.id);
+  if (!property) return res.status(404).json({ error: 'Property not found' });
+  if (!property.credentials) return res.status(400).json({ error: 'Property has no credentials' });
+  try {
+    const status = await checkSingleCredential(property);
+    res.json({ status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/properties', (req, res) => {
@@ -843,8 +954,8 @@ app.get('/auth/google/callback', async (req, res) => {
     }
     getDb().prepare('DELETE FROM oauth_state WHERE nonce = ?').run(decoded.nonce);
     const tokens = await exchangeCode(code);
-    getDb().prepare('UPDATE properties SET credentials = ? WHERE id = ?')
-      .run(encryptJson(tokens), propertyId);
+    getDb().prepare('UPDATE properties SET credentials = ?, credential_status = ? WHERE id = ?')
+      .run(encryptJson(tokens), 'ok', propertyId);
     res.redirect('/properties?success=google_connected');
   } catch (err) {
     console.error('OAuth callback error:', err);
@@ -868,8 +979,8 @@ app.post('/api/properties/:id/icloud', (req, res) => {
   const { apple_id, app_specific_password, calendar_url, calendar_name } = req.body;
   if (!apple_id || !app_specific_password || !calendar_url) return res.status(400).json({ error: 'Missing fields' });
   const creds = encryptJson({ apple_id, app_specific_password });
-  getDb().prepare('UPDATE properties SET credentials = ?, calendar_id = ? WHERE id = ?')
-    .run(creds, calendar_url, req.params.id);
+  getDb().prepare('UPDATE properties SET credentials = ?, calendar_id = ?, credential_status = ? WHERE id = ?')
+    .run(creds, calendar_url, 'ok', req.params.id);
   res.json({ ok: true });
 });
 
@@ -923,8 +1034,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 app.listen(PORT, () => console.log(`bin-calendar running on port ${PORT}`));
 ```
 
-**Verify:** `node src/server.js` starts without errors (requires `ENCRYPTION_KEY` set). `curl http://localhost:3000/health` returns `{"status":"ok","nextSync":"..."}`.
-**Depends on:** Steps 3, 5, 7, 8, 9, 10, 11
+**Verify:** `node src/server.js` starts without errors (requires `ENCRYPTION_KEY` set). `curl http://localhost:3000/health` returns `{"status":"ok","nextSync":"..."}`. `curl http://localhost:3000/api/properties` returns rows including `credential_status` and `credential_checked_at` fields.
+**Depends on:** Steps 3, 5, 7, 8, 9, 10, 10b, 11
 
 ---
 
@@ -1124,7 +1235,7 @@ function showToast(msg, type = 'success') {
 
 ### Step 16: Create Dashboard view
 
-**What:** Property status cards, Sync Now button with in-progress state, next sync date.
+**What:** Property status cards (including credential status badge and Reconnect button), Sync Now button with in-progress state, next sync date.
 **File:** `public/dashboard.js` (create)
 **Change:**
 ```js
@@ -1173,20 +1284,33 @@ async function renderDashboard() {
     return;
   }
   cards.innerHTML = properties.map(p => {
-    const connected = p.connected;
+    const calLabel = p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud';
+    const connected = !!p.connected;
+    const credInvalid = connected && p.credential_status === 'invalid';
+    const checkedAt = p.credential_checked_at
+      ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+      : null;
     return `<div class="card">
-      <div class="card-label">${p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud'}</div>
-      <div class="card-value">${p.label}</div>
-      <div style="margin-top:6px;font-size:12px;color:#64748b">UPRN: ${p.uprn}</div>
+      <div class="card-label">${calLabel}</div>
+      <div class="card-value">${escHtml(p.label)}</div>
+      <div style="margin-top:6px;font-size:12px;color:#64748b">UPRN: ${escHtml(p.uprn)}</div>
       <div style="margin-top:8px">
-        ${connected ? '<span class="badge badge-success">Connected</span>' : '<span class="badge badge-warning">Not connected</span>'}
+        ${credInvalid
+          ? '<span class="badge badge-error">Credentials expired</span>'
+          : connected
+            ? '<span class="badge badge-success">Connected</span>'
+            : '<span class="badge badge-warning">Not connected</span>'}
+        ${checkedAt ? `<span style="display:block;margin-top:4px;font-size:11px;color:#94a3b8">Checked ${escHtml(checkedAt)}</span>` : ''}
       </div>
+      ${credInvalid
+        ? `<div style="margin-top:8px"><button class="btn btn-sm btn-secondary" onclick="navigate('properties')">Reconnect</button></div>`
+        : ''}
     </div>`;
   }).join('');
 }
 ```
 
-**Verify:** Dashboard loads property cards. "Sync Now" button triggers sync and disables during run.
+**Verify:** Dashboard loads property cards. "Sync Now" button triggers sync and disables during run. Properties with `credential_status === 'invalid'` show the red "Credentials expired" badge and a Reconnect button.
 **Depends on:** Step 15
 
 ---
@@ -1230,16 +1354,33 @@ async function renderPropertiesTable() {
   }
   el.innerHTML = `<table>
     <thead><tr><th>Label</th><th>UPRN</th><th>Calendar</th><th>Status</th><th>Actions</th></tr></thead>
-    <tbody>${properties.map(p => `<tr>
-      <td>${p.label}</td>
-      <td><code>${p.uprn}</code></td>
-      <td>${p.calendar_type === 'google' ? 'Google' : 'iCloud'}</td>
-      <td>${p.connected ? '<span class="badge badge-success">Connected</span>' : '<span class="badge badge-warning">Not connected</span>'}</td>
-      <td>
-        ${!p.connected && p.calendar_type === 'google' ? `<button class="btn btn-sm btn-secondary" onclick="reconnectGoogle(${p.id})">Reconnect</button> ` : ''}
-        <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id})">Delete</button>
-      </td>
-    </tr>`).join('')}</tbody>
+    <tbody>${properties.map(p => {
+      const connected = !!p.connected;
+      const credInvalid = connected && p.credential_status === 'invalid';
+      const checkedAt = p.credential_checked_at
+        ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+        : null;
+      return `<tr>
+        <td>${escHtml(p.label)}</td>
+        <td><code style="font-size:12px">${escHtml(p.uprn)}</code></td>
+        <td>${p.calendar_type === 'google' ? 'Google' : 'iCloud'}</td>
+        <td>${credInvalid
+          ? '<span class="badge badge-error">Credentials expired</span>'
+          : connected
+            ? '<span class="badge badge-success">Connected</span>'
+            : '<span class="badge badge-warning">Not connected</span>'}
+          ${checkedAt ? `<br><span style="font-size:11px;color:#94a3b8">Checked ${escHtml(checkedAt)}</span>` : ''}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
+          ${p.calendar_type === 'google'
+            ? `<button class="btn btn-sm btn-secondary" onclick="reconnectGoogle(${p.id})">Reconnect</button>`
+            : credInvalid
+              ? `<button class="btn btn-sm btn-secondary" onclick="reconnectIcloud(${p.id})">Reconnect</button>`
+              : ''}
+          <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id}, '${escHtml(p.label)}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('')}</tbody>
   </table>`;
 }
 
@@ -1373,7 +1514,7 @@ function reconnectGoogle(id) {
 }
 ```
 
-**Verify:** Properties table renders. Add Property modal opens. Address lookup (if configured) populates UPRN. Google connect redirects to Google. iCloud flow fetches calendars and saves.
+**Verify:** Properties table renders. Add Property modal opens. Address lookup (if configured) populates UPRN. Google connect redirects to Google. iCloud flow fetches calendars and saves. Google properties always show Reconnect; iCloud properties show Reconnect only when `credential_status === 'invalid'`. The red "Credentials expired" badge and "Checked …" date display correctly.
 **Depends on:** Step 15
 
 ---

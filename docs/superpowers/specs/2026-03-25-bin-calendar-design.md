@@ -40,16 +40,17 @@ Single Docker container running a Node.js + Express application. It serves the w
 ```
 bin-calendar/
 ├── src/
-│   ├── server.js          # Express app and routes
-│   ├── scheduler.js       # node-cron: fires sync on 1st of each month
-│   ├── sync.js            # Orchestrates per-UPRN sync run
-│   ├── ics.js             # Fetches and parses EAC ICS endpoint
-│   ├── google.js          # Google Calendar API integration (googleapis)
-│   ├── icloud.js          # iCloud CalDAV integration (tsdav)
-│   ├── uprn.js            # getAddress.io address/UPRN lookup
-│   └── db.js              # SQLite via better-sqlite3, applies migrations at startup
-├── src/migrations/        # Sequential SQL migration files (001.sql, 002.sql, ...)
-├── public/                # Web UI (plain HTML/CSS/JS, no framework)
+│   ├── server.js              # Express app and routes
+│   ├── scheduler.js           # node-cron: monthly sync + weekly credential check
+│   ├── sync.js                # Orchestrates per-UPRN sync run
+│   ├── credential-check.js    # Weekly credential validity check for all properties
+│   ├── ics.js                 # Fetches and parses EAC ICS endpoint
+│   ├── google.js              # Google Calendar API integration (googleapis)
+│   ├── icloud.js              # iCloud CalDAV integration (tsdav)
+│   ├── uprn.js                # getAddress.io address/UPRN lookup
+│   └── db.js                  # SQLite via better-sqlite3, applies migrations at startup
+├── src/migrations/            # Sequential SQL migration files (001.sql, 002.sql, ...)
+├── public/                    # Web UI (plain HTML/CSS/JS, no framework)
 ├── Dockerfile
 ├── docker-compose.yml
 └── .env.example
@@ -70,6 +71,8 @@ One row per UPRN/calendar mapping.
 | calendar_type | TEXT | `google` or `icloud` |
 | calendar_id | TEXT | Google: `'primary'`. iCloud: the CalDAV calendar URL. Null until setup completes. |
 | credentials | TEXT | AES-256-GCM encrypted JSON (see Credentials JSON below); null for incomplete setup |
+| credential_status | TEXT | `ok`, `invalid`, or `unknown` (default). Set to `ok` when credentials are saved; set to `invalid` when an auth error is detected during sync or the weekly credential check. |
+| credential_checked_at | DATETIME | Timestamp of the last explicit credential verification (weekly check or manual check via API). Null if never checked. |
 | created_at | DATETIME | |
 | updated_at | DATETIME | Maintained via a SQLite `AFTER UPDATE` trigger defined in `001.sql` |
 
@@ -135,6 +138,10 @@ The SQLite database is stored at `/app/data/bin-calendar.db` inside the containe
 ### Database migrations
 
 `db.js` applies migrations at startup by comparing the current `schema_version` against sequential SQL files in `src/migrations/`. Migrations run in order and are never re-applied. If `ENCRYPTION_KEY` changes between deployments, all stored credentials become unreadable — the UI surfaces a credential error on next sync and the user must re-enter credentials.
+
+Current migrations:
+- `001.sql` — creates all initial tables, indexes, and the `updated_at` trigger
+- `002.sql` — adds `credential_status` and `credential_checked_at` columns to `properties`
 
 ---
 
@@ -213,8 +220,9 @@ No session, cookies, or CAPTCHA handling required. The response is a valid ICS f
    e. Determine the date range: from the earliest to latest `DTSTART` in the fetched ICS
    f. Fetch existing events from the target calendar within that date range
    g. Deduplicate by UID — skip events already present (no updates)
-   h. Insert new events only. Calendar write operations are not retried — a write failure (including Google token refresh failure, see below) records an error in `sync_results` and stops processing for that property. Other properties continue.
-   i. Write a `sync_results` record (events_added, events_skipped, error if any, started_at, completed_at)
+   h. Insert new events only. Calendar write operations are not retried — a write failure records an error in `sync_results` and stops processing for that property. Other properties continue.
+   i. If the failure matches known auth error patterns (`invalid_grant`, HTTP 401/403, `unauthorized`, `forbidden`, token expired/revoked, `auth failed`, `authentication failed`), set `credential_status = 'invalid'` and `credential_checked_at = now()` on the property row. On success, set `credential_status = 'ok'`.
+   j. Write a `sync_results` record (events_added, events_skipped, error if any, started_at, completed_at)
 5. Update `sync_runs` status:
    - `success` — all eligible properties synced without error
    - `partial` — at least one property succeeded, at least one failed
@@ -227,11 +235,21 @@ Manual sync ("Sync Now" button) runs the same flow immediately. If a sync is alr
 
 ## Scheduling
 
-`node-cron` triggers the sync at `00:00` on the 1st of each month:
+`node-cron` manages two scheduled tasks in `src/scheduler.js`:
+
+**Monthly sync** — triggers `runSync` at `00:00` on the 1st of each month:
 
 ```js
 cron.schedule('0 0 1 * *', runSync);
 ```
+
+**Weekly credential check** — triggers `checkAllCredentials` every Sunday at `00:00`:
+
+```js
+cron.schedule('0 0 * * 0', checkAllCredentials);
+```
+
+The credential check iterates over all properties with stored credentials, verifies each one against its calendar provider (Google token refresh attempt or iCloud CalDAV probe), and writes the resulting `ok` or `invalid` status plus `credential_checked_at` back to the `properties` row.
 
 ---
 
@@ -259,7 +277,7 @@ If the OAuth flow is abandoned (user closes the tab), the property row remains w
 
 ### Syncing
 - Before each sync, the access token is refreshed if expired. The refreshed access token and updated `expiry_date` are written back to the `credentials` column so the DB always reflects the current token state.
-- If token refresh fails (e.g. user revoked access), this is treated as a credential error: write the error to `sync_results`, surface the property as "Disconnected — reconnect required" in the Dashboard and Properties table, and continue with other properties
+- If token refresh fails (e.g. user revoked access), this is treated as a credential error: `credential_status` is set to `'invalid'`, the error is written to `sync_results`, and processing continues for other properties. The Dashboard and Properties table surface this as a red "Credentials expired" badge with a Reconnect button.
 - Existing events fetched via `calendar.events.list()` filtered by the ICS date range, deduplicated by `iCalUID`
 - New events inserted via `calendar.events.insert()`
 
@@ -299,15 +317,21 @@ Uses the `tsdav` npm package with CalDAV and an app-specific password.
 Sidebar navigation layout with three sections:
 
 ### Dashboard
-- Status card per property: label, calendar type, last synced date, events added, error (if any)
-- Disconnected Google properties shown with a "Reconnect required" warning
+- Status card per property: label, calendar type, connection status badge, credential check date
+- Badge states: green "Connected", amber "Not connected", red "Credentials expired" (when `credential_status === 'invalid'`)
+- Properties with `credential_status === 'invalid'` show a Reconnect button below the badge, linking to the Properties page
+- `credential_checked_at` date shown below the badge when available
 - "Sync Now" button — triggers an immediate full sync; disabled and shows "Sync in progress" if a run is active
 - Next scheduled sync date displayed
 
 ### Properties
-- Table: Label | UPRN | Calendar Type | Last Sync Status | Actions
-- Add / Edit / Delete actions per row
-- Properties with incomplete setup ("Not connected") shown with a warning badge and Reconnect / Delete actions
+- Table: Label | UPRN | Calendar Type | Status | Actions
+- Badge states per row: green "Connected", amber "Not connected", red "Credentials expired" (when `credential_status === 'invalid'`)
+- `credential_checked_at` date shown below the badge when available
+- Actions per row:
+  - Edit button (always)
+  - Reconnect button: shown for all Google properties; shown for iCloud properties when `credential_status === 'invalid'`
+  - Delete button (always)
 - Add/Edit form:
   - Label (text)
   - UPRN (text)
@@ -329,6 +353,20 @@ Sidebar navigation layout with three sections:
 { "status": "ok", "nextSync": "2026-04-01T00:00:00.000Z" }
 ```
 Returns HTTP 500 if the DB is unavailable. Used by Docker healthcheck and Synology Container Manager.
+
+### Credential status API
+
+`GET /api/properties` now includes `credential_status` and `credential_checked_at` fields for each property row.
+
+`GET /api/properties/:id/credential-status` performs an immediate credential check for a single property and returns the result:
+```json
+{ "status": "ok" }
+```
+or
+```json
+{ "status": "invalid" }
+```
+Returns HTTP 404 if the property does not exist; HTTP 400 if the property has no credentials stored. Updates `credential_status` and `credential_checked_at` on the property row as a side-effect.
 
 ---
 
