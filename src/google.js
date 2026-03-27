@@ -83,4 +83,14 @@ async function insertEvent(property, event) {
   });
 }
 
-module.exports = { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars, listEvents, insertEvent };
+async function checkCredentials(property) {
+  if (!property.credentials) return 'unknown';
+  try {
+    await listCalendars(property);
+    return 'ok';
+  } catch {
+    return 'invalid';
+  }
+}
+
+module.exports = { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars, listEvents, insertEvent, checkCredentials };
