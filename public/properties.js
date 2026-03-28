@@ -69,7 +69,13 @@ function openPropertyModal() {
 }
 
 function closeModal() {
-  document.getElementById('property-modal').classList.add('hidden');
+  const overlay = document.getElementById('property-modal');
+  overlay.classList.add('closing');
+  overlay.addEventListener('animationend', (e) => {
+    if (e.target !== overlay) return;
+    overlay.classList.add('hidden');
+    overlay.classList.remove('closing');
+  }, { once: true });
 }
 
 function handleModalClick(event) {

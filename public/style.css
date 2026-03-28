@@ -18,18 +18,24 @@
   --primary-glow-strong: rgba(0, 212, 170, 0.24);
 
   /* Status */
-  --success:    #06ffa5;
-  --success-bg: rgba(6, 255, 165, 0.10);
-  --danger:     #ff4757;
-  --danger-bg:  rgba(255, 71, 87, 0.10);
-  --warning:    #ffc048;
-  --warning-bg: rgba(255, 192, 72, 0.10);
-  --info:       #4fc3f7;
-  --info-bg:    rgba(79, 195, 247, 0.10);
-  --muted:      #6b7a99;
-  --muted-bg:   rgba(107, 122, 153, 0.10);
-  --partial:    #ff9f43;
-  --partial-bg: rgba(255, 159, 67, 0.10);
+  --success:      #06ffa5;
+  --success-bg:   rgba(6, 255, 165, 0.10);
+  --success-dark: #062e1f;
+  --success-dark-2: #0a3d29;
+  --danger:       #ff4757;
+  --danger-bg:    rgba(255, 71, 87, 0.10);
+  --danger-dim:   #cc3a47;
+  --danger-bright: #ff6677;
+  --danger-dark:  #2e0610;
+  --danger-dark-2: #3d0a15;
+  --warning:      #ffc048;
+  --warning-bg:   rgba(255, 192, 72, 0.10);
+  --info:         #4fc3f7;
+  --info-bg:      rgba(79, 195, 247, 0.10);
+  --muted:        #6b7a99;
+  --muted-bg:     rgba(107, 122, 153, 0.10);
+  --partial:      #ff9f43;
+  --partial-bg:   rgba(255, 159, 67, 0.10);
 
   /* Text */
   --text:   #e8edf5;
@@ -60,6 +66,10 @@
 
   /* Sidebar */
   --sidebar-width: 220px;
+  --bg-dark: #090c14;
+
+  /* Buttons */
+  --btn-primary-text: #050d0b;
 
   /* Transitions */
   --t:      all 0.2s ease;
@@ -98,7 +108,7 @@ code {
 /* ── Sidebar ────────────────────────────────────────────────── */
 .sidebar {
   width: var(--sidebar-width);
-  background: linear-gradient(180deg, #090c14 0%, #06080f 100%);
+  background: linear-gradient(180deg, var(--bg-dark) 0%, var(--bg) 100%);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -327,7 +337,7 @@ tr:hover td {
 
 .btn-primary {
   background: linear-gradient(135deg, var(--primary), var(--primary-dim));
-  color: #050d0b;
+  color: var(--btn-primary-text);
   font-weight: 600;
   box-shadow: 0 2px 12px var(--primary-glow);
 }
@@ -336,7 +346,7 @@ tr:hover td {
   background: linear-gradient(135deg, var(--primary-bright), var(--primary));
   box-shadow: 0 4px 20px var(--primary-glow-strong);
   transform: translateY(-1px);
-  color: #050d0b;
+  color: var(--btn-primary-text);
 }
 
 .btn-primary:disabled {
@@ -360,14 +370,14 @@ tr:hover td {
 }
 
 .btn-danger {
-  background: linear-gradient(135deg, var(--danger), #cc3a47);
-  color: #fff;
+  background: linear-gradient(135deg, var(--danger), var(--danger-dim));
+  color: var(--text);
   font-weight: 600;
   box-shadow: 0 2px 10px rgba(255,71,87,0.2);
 }
 
 .btn-danger:hover {
-  background: linear-gradient(135deg, #ff6677, var(--danger));
+  background: linear-gradient(135deg, var(--danger-bright), var(--danger));
   box-shadow: 0 4px 18px rgba(255,71,87,0.35);
   transform: translateY(-1px);
 }
@@ -437,9 +447,28 @@ select option { background: var(--surface-2); color: var(--text); }
 
 .modal-overlay.hidden { display: none; }
 
+.modal-overlay.closing {
+  animation: overlayOut 0.2s ease both;
+  pointer-events: none;
+}
+
+.modal-overlay.closing .modal {
+  animation: modalOut 0.2s ease both;
+}
+
 @keyframes overlayIn {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+@keyframes overlayOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@keyframes modalOut {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.94) translateY(-10px); }
 }
 
 .modal {
@@ -580,14 +609,14 @@ select option { background: var(--surface-2); color: var(--text); }
 }
 
 .toast-success {
-  background: linear-gradient(135deg, #062e1f, #0a3d29);
+  background: linear-gradient(135deg, var(--success-dark), var(--success-dark-2));
   color: var(--success);
   border: 1px solid rgba(6,255,165,0.22);
   box-shadow: var(--shadow-lg), 0 0 20px rgba(6,255,165,0.1);
 }
 
 .toast-error {
-  background: linear-gradient(135deg, #2e0610, #3d0a15);
+  background: linear-gradient(135deg, var(--danger-dark), var(--danger-dark-2));
   color: var(--danger);
   border: 1px solid rgba(255,71,87,0.22);
   box-shadow: var(--shadow-lg), 0 0 20px rgba(255,71,87,0.1);
