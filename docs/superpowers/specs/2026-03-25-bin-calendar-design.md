@@ -28,7 +28,6 @@ Out of scope (for now):
 - Mobile app or push notifications
 - Email notifications on sync failure
 - Updating events that already exist but have changed (existing events are skipped by UID, not updated)
-- Selecting a non-primary Google Calendar
 - Caching getAddress.io results
 
 ---
@@ -69,7 +68,7 @@ One row per UPRN/calendar mapping.
 | label | TEXT | Friendly name (e.g. "Home", "Mum") |
 | uprn | TEXT | East Ayrshire UPRN |
 | calendar_type | TEXT | `google` or `icloud` |
-| calendar_id | TEXT | Google: `'primary'`. iCloud: the CalDAV calendar URL. Null until setup completes. |
+| calendar_id | TEXT | Google: the selected calendar's ID (e.g. `'primary'` or a specific calendar ID). iCloud: the CalDAV calendar URL. Null until setup completes. |
 | credentials | TEXT | AES-256-GCM encrypted JSON (see Credentials JSON below); null for incomplete setup |
 | credential_status | TEXT | `ok`, `invalid`, or `unknown` (default). Set to `ok` when credentials are saved; set to `invalid` when an auth error is detected during sync or the weekly credential check. |
 | credential_checked_at | DATETIME | Timestamp of the last explicit credential verification (weekly check or manual check via API). Null if never checked. |
@@ -259,19 +258,20 @@ Uses the `googleapis` npm package with OAuth2.
 
 **OAuth2 scope:** `https://www.googleapis.com/auth/calendar.events`
 
-**Calendar:** The user's primary Google Calendar (`calendar_id = 'primary'`).
+**Calendar:** Any Google Calendar the user selects during the OAuth flow — not limited to the primary calendar. The selected calendar's ID is stored in `calendar_id`.
 
-### Setup (two-phase flow, once per Google calendar)
+### Setup (three-phase flow, once per Google calendar)
 
 1. User fills in label and UPRN, selects "Google" as the calendar type
-2. User clicks "Save & Connect Google Calendar" — the property is saved to the DB with `calendar_id = 'primary'` and `credentials = null`
+2. User clicks "Save & Get Auth Link" — the property is saved to the DB with `credentials = null`
 3. App generates a cryptographically random 32-byte nonce (hex-encoded), stores it in `oauth_state` with the `property_id` and a 10-minute expiry, then constructs the OAuth `state` value as `base64url({ "property_id": <id>, "nonce": "<hex>" })`
-4. User is redirected to the Google OAuth2 consent screen
+4. User opens the Google OAuth2 consent link in a new tab
 5. **Happy path:** Google redirects to `GOOGLE_REDIRECT_URI?code=...&state=<base64url>`
    - App base64url-decodes `state`, looks up the nonce in `oauth_state`, validates it matches and has not expired, then deletes the row
    - App exchanges the auth code for access + refresh tokens and stores them encrypted in `credentials`
-   - User is redirected to the Properties page with a success message
-6. **Error / denied path:** If the callback receives an `error` parameter (e.g. `access_denied`), the `oauth_state` row is deleted, the property row remains with `credentials = null`, and the user is redirected to the Properties page with an inline error message
+   - User pastes the redirect URL back into the UI
+6. **Calendar selection:** The user is shown a dropdown of their available Google Calendars (fetched via the Calendar API). The user selects the target calendar — this sets `calendar_id` to the selected calendar's ID.
+7. **Error / denied path:** If the callback receives an `error` parameter (e.g. `access_denied`), the `oauth_state` row is deleted, the property row remains with `credentials = null`, and the user is redirected to the Properties page with an inline error message
 
 If the OAuth flow is abandoned (user closes the tab), the property row remains with `credentials = null`. It appears in the Properties table as "Not connected" with Reconnect and Delete buttons. It is skipped during sync and does not appear in `sync_results`.
 
@@ -519,4 +519,3 @@ Or use Container Manager UI: stop, pull, start. The SQLite database persists in 
 - Email/webhook notification on sync failure
 - Authentication for the web UI (if NAS is internet-facing)
 - Updating existing events when EAC changes them (currently skipped by UID)
-- Selecting a non-primary Google Calendar
