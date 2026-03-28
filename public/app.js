@@ -21,8 +21,14 @@ function navigate(view) {
     a.classList.toggle('active', a.dataset.view === view);
   });
   document.querySelectorAll('.view').forEach(el => {
+    el.classList.remove('view-enter');
     el.classList.toggle('hidden', el.id !== `view-${view}`);
   });
+  const activeView = document.getElementById(`view-${view}`);
+  if (activeView) {
+    void activeView.offsetWidth; // trigger reflow to restart animation
+    activeView.classList.add('view-enter');
+  }
   location.hash = view;
   if (viewLoaders[view]) viewLoaders[view]();
 }
@@ -47,5 +53,8 @@ function showToast(msg, type = 'success') {
   t.className = `toast toast-${type}`;
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  setTimeout(() => {
+    t.classList.add('toast-exit');
+    t.addEventListener('animationend', () => t.remove(), { once: true });
+  }, 3000);
 }
