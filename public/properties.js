@@ -4,7 +4,7 @@ registerView('properties', loadProperties);
 async function loadProperties() {
   const el = document.getElementById('view-properties');
   el.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-lg)">
       <h1>Properties</h1>
       <button class="btn btn-primary" onclick="openPropertyModal()">+ Add Property</button>
     </div>
@@ -24,7 +24,7 @@ async function renderPropertiesTable() {
   if (!el) return;
 
   if (properties.length === 0) {
-    el.innerHTML = '<p style="color:#64748b;padding:16px 0">No properties yet. Click "+ Add Property" to get started.</p>';
+    el.innerHTML = '<p style="color:var(--text-3);padding:var(--space-md) 0">No properties yet. Click "+ Add Property" to get started.</p>';
     return;
   }
 
@@ -37,15 +37,17 @@ async function renderPropertiesTable() {
         ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
         : null;
       return `<tr>
-        <td>${escHtml(p.label)}</td>
-        <td><code style="font-size:12px">${escHtml(p.uprn)}</code></td>
-        <td>${p.calendar_type === 'google' ? 'Google' : 'iCloud'}</td>
-        <td>${credInvalid
-          ? '<span class="badge badge-error">Credentials expired</span>'
-          : connected
-            ? '<span class="badge badge-success">Connected</span>'
-            : '<span class="badge badge-warning">Not connected</span>'}
-          ${checkedAt ? `<br><span style="font-size:11px;color:#94a3b8">Checked ${escHtml(checkedAt)}</span>` : ''}</td>
+        <td style="color:var(--text);font-weight:500">${escHtml(p.label)}</td>
+        <td><code>${escHtml(p.uprn)}</code></td>
+        <td style="color:var(--text-2)">${p.calendar_type === 'google' ? 'Google' : 'iCloud'}</td>
+        <td>
+          ${credInvalid
+            ? '<span class="badge badge-error">Credentials expired</span>'
+            : connected
+              ? '<span class="badge badge-success">Connected</span>'
+              : '<span class="badge badge-warning">Not connected</span>'}
+          ${checkedAt ? `<br><span style="font-size:11px;color:var(--text-3)">Checked ${escHtml(checkedAt)}</span>` : ''}
+        </td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
           ${p.calendar_type === 'google'
@@ -53,7 +55,7 @@ async function renderPropertiesTable() {
             : credInvalid
               ? `<button class="btn btn-sm btn-secondary" onclick="reconnectIcloud(${p.id})">Reconnect</button>`
               : ''}
-          <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id}, '${escHtml(p.label)}')">Delete</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id}, '${escAttr(p.label)}')">Delete</button>
         </td>
       </tr>`;
     }).join('')}</tbody>
@@ -87,7 +89,7 @@ function renderPropertyForm() {
         <input id="postcode-input" placeholder="e.g. KA1 1AB" style="flex:1">
         <button class="btn btn-secondary" type="button" onclick="lookupAddress()">Search</button>
       </div>
-      <div id="address-results" style="margin-top:6px;font-size:12px;color:#64748b"></div>
+      <div id="address-results" style="margin-top:6px;font-size:12px;color:var(--text-3)"></div>
     </div>` : ''}
     <div class="form-group">
       <label>Label</label>
@@ -119,7 +121,7 @@ function renderCalendarFields() {
   if (type === 'google') {
     el.innerHTML = `
       <div id="google-step-1">
-        <p style="font-size:12px;color:#64748b;margin-bottom:12px">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
           Save your property first, then authorise Google Calendar access in a new tab.
         </p>
         <div class="form-actions">
@@ -128,17 +130,17 @@ function renderCalendarFields() {
         </div>
       </div>
       <div id="google-step-2" style="display:none">
-        <p style="font-size:12px;font-weight:600;margin-bottom:8px">Step 1 — Authorise Google Calendar</p>
-        <p style="font-size:12px;color:#64748b;margin-bottom:10px">
+        <p style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text)">Step 1 — Authorise Google Calendar</p>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">
           Click the link below to open Google's authorisation page in a new tab.
           After you approve access, Google will redirect to a page that won't load — that's expected.
         </p>
         <a id="google-auth-link" href="#" target="_blank" rel="noopener"
-           style="display:inline-block;margin-bottom:16px;font-size:13px;color:#3b82f6">
+           style="display:inline-block;margin-bottom:16px;font-size:13px">
           Open Google authorisation &rarr;
         </a>
-        <p style="font-size:12px;font-weight:600;margin-bottom:4px">Step 2 — Paste the URL</p>
-        <p style="font-size:12px;color:#64748b;margin-bottom:8px">
+        <p style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text)">Step 2 — Paste the URL</p>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:8px">
           Copy the full URL from your browser's address bar (starting with <code>http://localhost...</code>) and paste it below.
         </p>
         <div class="form-group">
@@ -151,8 +153,8 @@ function renderCalendarFields() {
         </div>
       </div>
       <div id="google-step-3" style="display:none">
-        <p style="font-size:12px;font-weight:600;margin-bottom:8px">Step 3 — Select Calendar</p>
-        <p style="font-size:12px;color:#64748b;margin-bottom:10px">Choose which Google Calendar to sync bin collections into.</p>
+        <p style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text)">Step 3 — Select Calendar</p>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">Choose which Google Calendar to sync bin collections into.</p>
         <div class="form-group">
           <select id="google-calendar-select" style="width:100%">
             <option value="">Loading calendars...</option>
@@ -282,18 +284,18 @@ async function fetchIcloudCalendars() {
   const appleId = document.getElementById('apple-id')?.value.trim();
   const pass = document.getElementById('apple-pass')?.value.trim();
   const el = document.getElementById('calendar-select');
-  if (!appleId || !pass) { el.innerHTML = '<span style="color:#dc2626;font-size:12px">Enter Apple ID and password first</span>'; return; }
-  el.innerHTML = '<span style="font-size:12px;color:#64748b">Fetching calendars...</span>';
+  if (!appleId || !pass) { el.innerHTML = '<span style="color:var(--danger);font-size:12px">Enter Apple ID and password first</span>'; return; }
+  el.innerHTML = '<span style="font-size:12px;color:var(--text-3)">Fetching calendars...</span>';
   try {
     const cals = await api('POST', '/api/icloud/calendars', { apple_id: appleId, app_specific_password: pass });
-    if (cals.length === 0) { el.innerHTML = '<span style="font-size:12px;color:#dc2626">No calendars found</span>'; return; }
+    if (cals.length === 0) { el.innerHTML = '<span style="font-size:12px;color:var(--danger)">No calendars found</span>'; return; }
     el.innerHTML = `<label style="margin-top:8px">Select calendar</label>
       <select id="cal-url" style="width:100%;margin-top:4px">
         <option value="">Select...</option>
         ${cals.map(c => `<option value="${escAttr(c.url)}">${escHtml(c.displayName)}</option>`).join('')}
       </select>`;
   } catch (err) {
-    el.innerHTML = `<span style="color:#dc2626;font-size:12px">Error: ${escHtml(err.message)}</span>`;
+    el.innerHTML = `<span style="color:var(--danger);font-size:12px">Error: ${escHtml(err.message)}</span>`;
   }
 }
 
@@ -415,7 +417,7 @@ async function reconnectIcloud(id) {
   document.getElementById('property-modal').classList.remove('hidden');
   const body = document.getElementById('modal-body');
   body.innerHTML = `
-    <p style="font-size:12px;color:#64748b;margin-bottom:12px">
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
       Re-enter your Apple ID and app-specific password to restore the calendar connection.
     </p>
     <div class="form-group">
@@ -446,14 +448,14 @@ async function fetchReconnectIcloudCalendars() {
   const pass = document.getElementById('reconnect-apple-pass')?.value.trim();
   const el = document.getElementById('reconnect-calendar-select');
   if (!appleId || !pass) {
-    el.innerHTML = '<span style="color:#dc2626;font-size:12px">Enter Apple ID and password first</span>';
+    el.innerHTML = '<span style="color:var(--danger);font-size:12px">Enter Apple ID and password first</span>';
     return;
   }
-  el.innerHTML = '<span style="font-size:12px;color:#64748b">Fetching calendars...</span>';
+  el.innerHTML = '<span style="font-size:12px;color:var(--text-3)">Fetching calendars...</span>';
   try {
     const cals = await api('POST', '/api/icloud/calendars', { apple_id: appleId, app_specific_password: pass });
     if (cals.length === 0) {
-      el.innerHTML = '<span style="font-size:12px;color:#dc2626">No calendars found</span>';
+      el.innerHTML = '<span style="font-size:12px;color:var(--danger)">No calendars found</span>';
       return;
     }
     el.innerHTML = `<label style="margin-top:8px">Select calendar</label>
@@ -462,7 +464,7 @@ async function fetchReconnectIcloudCalendars() {
         ${cals.map(c => `<option value="${escAttr(c.url)}">${escHtml(c.displayName)}</option>`).join('')}
       </select>`;
   } catch (err) {
-    el.innerHTML = `<span style="color:#dc2626;font-size:12px">Error: ${escHtml(err.message)}</span>`;
+    el.innerHTML = `<span style="color:var(--danger);font-size:12px">Error: ${escHtml(err.message)}</span>`;
   }
 }
 

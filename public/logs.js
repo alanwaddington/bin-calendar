@@ -8,7 +8,7 @@ async function loadLogs() {
     renderLogs(runs, results);
   } catch (err) {
     document.getElementById('logs-list').innerHTML =
-      `<p style="color:#dc2626">Error loading logs: ${escLogHtml(err.message)}</p>`;
+      `<p style="color:var(--danger)">Error loading logs: ${escLogHtml(err.message)}</p>`;
   }
 }
 
@@ -17,7 +17,7 @@ function renderLogs(runs, results) {
   if (!list) return;
 
   if (runs.length === 0) {
-    list.innerHTML = '<p style="color:#64748b">No sync runs yet.</p>';
+    list.innerHTML = '<p style="color:var(--text-3)">No sync runs yet.</p>';
     return;
   }
 
@@ -25,7 +25,7 @@ function renderLogs(runs, results) {
     const runResults = results.filter(r => r.run_id === run.id);
     const duration = run.completed_at
       ? Math.round((new Date(run.completed_at) - new Date(run.started_at)) / 1000) + 's'
-      : '—';
+      : '\u2014';
     const dateStr = new Date(run.started_at).toLocaleString('en-GB', {
       day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
     });
@@ -33,13 +33,13 @@ function renderLogs(runs, results) {
     return `<div class="log-run">
       <div class="log-run-header" onclick="this.nextElementSibling.classList.toggle('open')">
         <span class="badge badge-${run.status}">${run.status}</span>
-        <span style="font-size:13px">${escLogHtml(dateStr)}</span>
-        <span style="font-size:12px;color:#64748b;margin-left:auto">${escLogHtml(duration)}</span>
-        ${run.error ? `<span style="font-size:12px;color:#dc2626;margin-left:8px">${escLogHtml(run.error)}</span>` : ''}
+        <span style="font-size:13px;color:var(--text-2)">${escLogHtml(dateStr)}</span>
+        <span style="font-size:12px;color:var(--text-3);margin-left:auto">${escLogHtml(duration)}</span>
+        ${run.error ? `<span style="font-size:12px;color:var(--danger);margin-left:8px">${escLogHtml(run.error)}</span>` : ''}
       </div>
       <div class="log-run-body">
         ${runResults.length === 0
-          ? '<div class="log-result" style="color:#64748b">No property results recorded</div>'
+          ? '<div class="log-result" style="color:var(--text-3)">No property results recorded</div>'
           : runResults.map(r => renderLogResult(r)).join('')}
       </div>
     </div>`;
@@ -47,14 +47,14 @@ function renderLogs(runs, results) {
 }
 
 function renderLogResult(r) {
-  const label = r.label ? escLogHtml(r.label) : '<em style="color:#94a3b8">(deleted property)</em>';
+  const label = r.label ? escLogHtml(r.label) : '<em style="color:var(--text-3)">(deleted property)</em>';
   const dur = r.started_at && r.completed_at
     ? ` &middot; ${Math.round((new Date(r.completed_at) - new Date(r.started_at)) / 1000)}s`
     : '';
   return `<div class="log-result">
-    <strong>${label}</strong>
-    &nbsp;&mdash;&nbsp; added: ${r.events_added}, skipped: ${r.events_skipped}${dur}
-    ${r.error ? `<span style="color:#dc2626"> &mdash; ${escLogHtml(r.error)}</span>` : ''}
+    <strong style="color:var(--text)">${label}</strong>
+    <span style="color:var(--text-3)">&nbsp;&mdash;&nbsp;</span>added: ${r.events_added}, skipped: ${r.events_skipped}${dur}
+    ${r.error ? `<span style="color:var(--danger)"> &mdash; ${escLogHtml(r.error)}</span>` : ''}
   </div>`;
 }
 
