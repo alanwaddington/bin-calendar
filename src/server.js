@@ -196,6 +196,70 @@ app.get('/api/sync/runs', (req, res) => {
   res.json({ runs, results });
 });
 
+// ── Next Collection ────────────────────────────────────────────────────────
+app.get('/api/next-collection', (req, res) => {
+  const rows = getDb().prepare(`
+    SELECT
+      e.start_date        AS date,
+      CAST((julianday(e.start_date) - julianday('now')) AS INTEGER) AS days_until,
+      e.summary,
+      bt.label            AS label,
+      bt.colour           AS colour,
+      e.property_id,
+      p.label             AS property_label
+    FROM events e
+    JOIN properties p ON p.id = e.property_id
+    LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'
+    WHERE e.start_date >= date('now')
+    ORDER BY e.start_date ASC
+  `).all();
+
+  const collections = rows
+    .filter(r => rows[0] && r.date === rows[0].date)
+    .map(r => ({
+      date: r.date,
+      daysUntil: r.days_until,
+      summary: r.summary,
+      label: r.label || r.summary,
+      colour: r.colour || '#6b7a99',
+      propertyId: r.property_id,
+      propertyLabel: r.property_label,
+    }));
+
+  res.json({ collections });
+});
+
+// ── Bin Types ──────────────────────────────────────────────────────────────
+app.get('/api/bin-types', (req, res) => {
+  const rows = getDb().prepare('SELECT * FROM bin_types ORDER BY id').all();
+  res.json(rows);
+});
+
+app.post('/api/bin-types', (req, res) => {
+  const { summary_match, label, colour } = req.body;
+  if (!summary_match || !label || !colour) return res.status(400).json({ error: 'Missing fields: summary_match, label, colour required' });
+  const result = getDb().prepare(
+    'INSERT INTO bin_types (summary_match, label, colour) VALUES (?, ?, ?)'
+  ).run(summary_match, label, colour);
+  res.status(201).json({ id: result.lastInsertRowid, summary_match, label, colour });
+});
+
+app.put('/api/bin-types/:id', (req, res) => {
+  const { summary_match, label, colour } = req.body;
+  if (!summary_match || !label || !colour) return res.status(400).json({ error: 'Missing fields: summary_match, label, colour required' });
+  const result = getDb().prepare(
+    'UPDATE bin_types SET summary_match = ?, label = ?, colour = ? WHERE id = ?'
+  ).run(summary_match, label, colour, req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
+  res.json({ ok: true });
+});
+
+app.delete('/api/bin-types/:id', (req, res) => {
+  const result = getDb().prepare('DELETE FROM bin_types WHERE id = ?').run(req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
+  res.status(204).send();
+});
+
 // ── UPRN Lookup ────────────────────────────────────────────────────────────
 app.get('/api/uprn/lookup', async (req, res) => {
   if (!process.env.GETADDRESS_API_KEY) {
