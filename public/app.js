@@ -33,7 +33,7 @@ function navigate(view) {
   if (viewLoaders[view]) viewLoaders[view]();
 }
 
-document.querySelectorAll('.nav-link').forEach(a => {
+document.querySelectorAll('.nav-link, .topnav-brand').forEach(a => {
   a.addEventListener('click', e => { e.preventDefault(); navigate(a.dataset.view); });
 });
 
