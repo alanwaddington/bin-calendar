@@ -135,7 +135,6 @@ tests/
 ├── unit/
 │   ├── crypto.test.js
 │   ├── ics.test.js
-│   ├── uprn.test.js
 │   ├── scheduler.test.js
 │   └── db.test.js
 ├── integration/
@@ -176,8 +175,7 @@ Pull requests also run the test job (no Docker build).
 | POST | `/api/properties/:id/icloud` | Save iCloud credentials |
 | POST | `/api/sync` | Trigger a manual sync |
 | GET | `/api/sync/runs` | Sync history |
-| GET | `/api/uprn/lookup?postcode=` | Address lookup by postcode |
-| GET | `/api/uprn/detail?id=` | Address detail (includes UPRN) |
+
 
 ## Data
 
