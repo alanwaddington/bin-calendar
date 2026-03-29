@@ -72,4 +72,63 @@ describe('db', () => {
     const { initDb: initDb2 } = require('../../src/db');
     expect(() => initDb2()).not.toThrow();
   });
+
+  test('initDb_migration003_createsEventsTable', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
+    expect(tables).toContain('events');
+  });
+
+  test('initDb_migration003_eventsTableHasUniquePropertyUidConstraint', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    db.prepare("INSERT INTO properties (label, uprn, calendar_type) VALUES ('Home', '12345', 'google')").run();
+    db.prepare("INSERT INTO events (property_id, uid, summary, start_date) VALUES (1, 'uid-1', 'Grey Bin', '2026-04-01')").run();
+    expect(() =>
+      db.prepare("INSERT INTO events (property_id, uid, summary, start_date) VALUES (1, 'uid-1', 'Grey Bin', '2026-04-01')").run()
+    ).toThrow();
+  });
+
+  test('initDb_migration003_eventsCascadeDeletesOnPropertyRemoval', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    db.prepare("INSERT INTO properties (label, uprn, calendar_type) VALUES ('Home', '12345', 'google')").run();
+    db.prepare("INSERT INTO events (property_id, uid, summary, start_date) VALUES (1, 'uid-1', 'Grey Bin', '2026-04-01')").run();
+    db.prepare("DELETE FROM properties WHERE id = 1").run();
+
+    const events = db.prepare("SELECT * FROM events").all();
+    expect(events).toHaveLength(0);
+  });
+
+  test('initDb_migration003_createsBinTypesTable', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
+    expect(tables).toContain('bin_types');
+  });
+
+  test('initDb_migration003_seedsDefaultBinTypes', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const binTypes = db.prepare("SELECT summary_match FROM bin_types ORDER BY id").all().map(r => r.summary_match);
+    expect(binTypes).toContain('Grey');
+    expect(binTypes).toContain('Blue');
+    expect(binTypes).toContain('Brown');
+    expect(binTypes).toContain('Green');
+  });
+
+  test('initDb_migration003_binTypesSummaryMatchIsUnique', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    expect(() =>
+      db.prepare("INSERT INTO bin_types (summary_match, label, colour) VALUES ('Grey', 'Duplicate', '#000000')").run()
+    ).toThrow();
+  });
 });

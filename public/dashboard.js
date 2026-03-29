@@ -2,84 +2,211 @@ registerView('dashboard', loadDashboard);
 
 async function loadDashboard() {
   const el = document.getElementById('view-dashboard');
-  el.innerHTML = '<h1>Dashboard</h1><div id="sync-bar" class="sync-bar"></div><div id="property-cards" class="card-grid"></div>';
-  await renderDashboard();
+
+  el.innerHTML = `
+    <div class="section-label">NEXT COLLECTION</div>
+    <div class="hero-card" id="hero-card">
+      <div class="hero-card-empty" style="opacity:0.4">Loading\u2026</div>
+    </div>
+
+    <div class="section-label" style="margin-top:var(--space-lg)">YOUR PROPERTIES</div>
+    <div class="tile-grid" id="property-tiles"></div>
+
+    <div class="section-label">SYNC HEALTH</div>
+    <div class="sync-health" id="sync-health">
+      <div class="sync-health-left">
+        <div class="sparkline" id="sparkline">
+          ${Array(7).fill('<div class="spark-dot empty"></div>').join('')}
+        </div>
+        <div class="sync-meta" id="sync-meta"></div>
+      </div>
+      <button class="btn btn-primary btn-sm" id="sync-now-btn" onclick="syncNow()">Sync Now</button>
+    </div>`;
+
+  await refreshDashboard();
 }
 
-async function renderDashboard() {
-  try {
-    const [properties, { runs }, health] = await Promise.all([
-      api('GET', '/api/properties'),
-      api('GET', '/api/sync/runs'),
-      fetch('/health').then(r => r.json()),
-    ]);
+async function refreshDashboard() {
+  const [nextCollection, properties, syncData, health] = await Promise.allSettled([
+    api('GET', '/api/next-collection'),
+    api('GET', '/api/properties'),
+    api('GET', '/api/sync/runs'),
+    api('GET', '/health'),
+  ]);
 
-    const lastRun = runs[0];
-    const isRunning = lastRun?.status === 'running';
-    const nextDate = new Date(health.nextSync).toLocaleDateString('en-GB', {
-      day: 'numeric', month: 'long', year: 'numeric',
-    });
+  renderHeroCard(nextCollection.status === 'fulfilled' ? nextCollection.value : null);
+  renderPropertyTiles(properties.status === 'fulfilled' ? properties.value : []);
+  renderSparkline(
+    syncData.status === 'fulfilled' ? syncData.value.runs : [],
+    health.status === 'fulfilled' ? health.value.nextSync : null
+  );
+}
 
-    document.getElementById('sync-bar').innerHTML = `
-      <div>
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-3);margin-bottom:4px">Next Sync</div>
-        <div style="font-family:var(--font-display);font-size:15px;font-weight:600;color:var(--text)">${nextDate}</div>
-        ${lastRun ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:var(--text-3)">Last run</span><span class="badge badge-${lastRun.status}">${lastRun.status}</span></div>` : ''}
-      </div>
-      <button class="btn btn-primary" id="sync-now-btn" ${isRunning ? 'disabled' : ''}>
-        ${isRunning ? 'Syncing\u2026' : 'Sync Now'}
-      </button>`;
+function renderHeroCard(data) {
+  const el = document.getElementById('hero-card');
+  if (!el) return;
 
-    document.getElementById('sync-now-btn')?.addEventListener('click', async () => {
-      const btn = document.getElementById('sync-now-btn');
-      btn.disabled = true;
-      btn.textContent = 'Syncing\u2026';
-      try {
-        const result = await api('POST', '/api/sync');
-        showToast(`Sync complete: ${result.overallStatus || result.message}`);
-      } catch (err) {
-        showToast(err.message, 'error');
-      }
-      await renderDashboard();
-    });
+  if (!data || !data.collections || data.collections.length === 0) {
+    el.innerHTML = `<div class="hero-card-empty">No upcoming collections found \u2014 sync to update</div>`;
+    return;
+  }
 
-    const cards = document.getElementById('property-cards');
-    if (properties.length === 0) {
-      cards.innerHTML = `<p style="color:var(--text-3)">No properties configured. Go to
-        <a href="#" onclick="navigate('properties');return false">Properties</a> to add one.</p>`;
-      return;
+  const { collections } = data;
+  const first = collections[0];
+
+  // Parse date as local time to avoid UTC offset shifting the displayed day
+  const [y, m, d] = first.date.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const formattedDate = date.toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
+
+  const days = first.daysUntil;
+  const daysText = days <= 0 ? 'Today'
+    : days === 1 ? 'Tomorrow'
+    : `${days} days away`;
+
+  // De-duplicate bins by label (multiple properties may share the same bin type)
+  const seenLabels = new Set();
+  const uniqueBins = collections.filter(c => {
+    if (seenLabels.has(c.label)) return false;
+    seenLabels.add(c.label);
+    return true;
+  });
+
+  const uniquePropertyIds = [...new Set(collections.map(c => c.propertyId))];
+  const propertyText = uniquePropertyIds.length === 1
+    ? escHtml(collections[0].propertyLabel)
+    : 'Multiple properties';
+
+  el.innerHTML = `
+    <div class="hero-date">${escHtml(formattedDate)}</div>
+    <div class="hero-days">${escHtml(daysText)}</div>
+    <div class="hero-bins">
+      ${uniqueBins.map(bin =>
+        `<div class="hero-bin-chip" style="color:${escAttr(bin.colour)}">${escHtml(bin.label)}</div>`
+      ).join('')}
+    </div>
+    <div class="hero-property">${propertyText}</div>`;
+}
+
+function renderPropertyTiles(properties) {
+  const el = document.getElementById('property-tiles');
+  if (!el) return;
+
+  const tiles = properties.map(p => {
+    let statusClass, statusText;
+    if (!p.connected) {
+      statusClass = 'disconnected';
+      statusText = 'Action required';
+    } else if (p.credential_status === 'invalid') {
+      statusClass = 'invalid';
+      statusText = 'Action required';
+    } else if (p.credential_status === 'unknown') {
+      statusClass = 'unknown';
+      statusText = 'Needs attention';
+    } else {
+      statusClass = 'ok';
+      statusText = 'Connected';
     }
 
-    cards.innerHTML = properties.map((p, i) => {
-      const calLabel = p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud';
-      const connected = !!p.connected;
-      const credInvalid = connected && p.credential_status === 'invalid';
-      const checkedAt = p.credential_checked_at
-        ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-        : null;
-      return `<div class="card" style="animation-delay:${i * 0.08}s">
-        <div class="card-label">${calLabel}</div>
-        <div class="card-value">${escHtml(p.label)}</div>
-        <div style="margin-top:6px;font-size:12px;color:var(--text-3)">UPRN: ${escHtml(p.uprn)}</div>
-        <div style="margin-top:12px;display:flex;flex-direction:column;gap:4px">
-          ${credInvalid
-            ? '<span class="badge badge-error">Credentials expired</span>'
-            : connected
-              ? '<span class="badge badge-success">Connected</span>'
-              : '<span class="badge badge-warning">Not connected</span>'}
-          ${checkedAt ? `<span style="font-size:11px;color:var(--text-3)">Checked ${escHtml(checkedAt)}</span>` : ''}
-        </div>
-        ${credInvalid
-          ? `<div style="margin-top:12px"><button class="btn btn-sm btn-secondary" onclick="navigate('properties')">Reconnect</button></div>`
-          : ''}
-      </div>`;
-    }).join('');
-  } catch (err) {
-    document.getElementById('view-dashboard').innerHTML =
-      `<p style="color:var(--danger)">Error loading dashboard: ${escHtml(err.message)}</p>`;
+    const calType = p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud';
+
+    return `
+      <button class="property-tile status-${escAttr(statusClass)}" onclick="navigateToProperty(${p.id})">
+        <div class="tile-label">${escHtml(p.label)}</div>
+        <div class="tile-type">${escHtml(calType)}</div>
+        <div class="tile-status">${escHtml(statusText)}</div>
+      </button>`;
+  }).join('');
+
+  el.innerHTML = tiles + `<button class="tile-add" onclick="navigate('settings')">+ Add property</button>`;
+}
+
+function renderSparkline(runs, nextSync) {
+  const sparkEl = document.getElementById('sparkline');
+  const metaEl = document.getElementById('sync-meta');
+  if (!sparkEl) return;
+
+  // Take the 7 most recent runs; reverse so oldest is on the left
+  const recent = runs.slice(0, 7).reverse();
+  const emptyCount = 7 - recent.length;
+
+  const dots = [
+    ...Array(emptyCount).fill(null),
+    ...recent,
+  ];
+
+  sparkEl.innerHTML = dots.map(run => {
+    if (!run) return `<div class="spark-dot empty"></div>`;
+
+    const dotClass = run.status === 'success' ? 'success'
+      : (run.status === 'failed' || run.status === 'partial') ? 'failed'
+      : 'empty';
+
+    const dateStr = new Date(run.started_at).toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'short',
+    });
+    const tooltip = `${dateStr} \u2014 ${run.status}`;
+
+    return `<div class="spark-dot ${escAttr(dotClass)}" data-tooltip="${escAttr(tooltip)}"></div>`;
+  }).join('');
+
+  if (metaEl && nextSync) {
+    const formatted = new Date(nextSync).toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric',
+    });
+    metaEl.textContent = `Next auto-sync: ${formatted}`;
   }
 }
 
+async function syncNow() {
+  const btn = document.getElementById('sync-now-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Syncing\u2026';
+  }
+  try {
+    const result = await api('POST', '/api/sync');
+    if (result.status === 429) {
+      showToast('Sync already in progress', 'error');
+      return;
+    }
+    const label = result.overallStatus === 'success' ? 'Sync complete'
+      : result.overallStatus === 'skipped' ? 'Nothing to sync \u2014 add a property first'
+      : `Sync ${result.overallStatus}`;
+    showToast(label, result.overallStatus === 'failed' ? 'error' : 'success');
+
+    // Refresh hero card and sparkline without reloading properties
+    const [nextCollection, syncData, health] = await Promise.allSettled([
+      api('GET', '/api/next-collection'),
+      api('GET', '/api/sync/runs'),
+      api('GET', '/health'),
+    ]);
+    renderHeroCard(nextCollection.status === 'fulfilled' ? nextCollection.value : null);
+    renderSparkline(
+      syncData.status === 'fulfilled' ? syncData.value.runs : [],
+      health.status === 'fulfilled' ? health.value.nextSync : null
+    );
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Sync Now';
+    }
+  }
+}
+
+function navigateToProperty(propertyId) {
+  window._settingsTargetPropertyId = propertyId;
+  navigate('settings');
+}
+
 function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escAttr(str) {
+  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }

@@ -488,4 +488,199 @@ describe('server API', () => {
     const statusReset = calls.some(args => Array.from(args).includes('ok'));
     expect(statusReset).toBe(true);
   });
+
+  // --- GET /api/next-collection ---
+
+  test('getNextCollection_withEvents_returns200WithCollections', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-02',
+        days_until: 4,
+        summary: 'Grey Bin Collection',
+        label: 'General Waste',
+        colour: '#6b7280',
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('collections');
+    expect(Array.isArray(res.body.collections)).toBe(true);
+    expect(res.body.collections[0]).toMatchObject({
+      date: '2026-04-02',
+      daysUntil: 4,
+      summary: 'Grey Bin Collection',
+      label: 'General Waste',
+      colour: '#6b7280',
+      propertyId: 1,
+      propertyLabel: '12 Main St',
+    });
+  });
+
+  test('getNextCollection_withNoEvents_returnsEmptyArray', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body.collections).toHaveLength(0);
+  });
+
+  test('getNextCollection_withNoBinTypeMatch_returnsRawSummaryAndNeutralColour', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-02',
+        days_until: 4,
+        summary: 'Purple Bin Collection',
+        label: null,
+        colour: null,
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body.collections[0].label).toBe('Purple Bin Collection');
+    expect(res.body.collections[0].colour).toBe('#6b7a99');
+  });
+
+  // --- GET /api/bin-types ---
+
+  test('getBinTypes_returns200WithArray', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      { id: 1, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' },
+    ]);
+
+    const res = await request(app).get('/api/bin-types');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  // --- POST /api/bin-types ---
+
+  test('postBinType_withValidData_returns201WithId', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Purple', label: 'Mixed', colour: '#7c3aed' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBeDefined();
+  });
+
+  test('postBinType_withMissingSummaryMatch_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ label: 'Mixed', colour: '#7c3aed' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Missing/i);
+  });
+
+  test('postBinType_withMissingLabel_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Purple', colour: '#7c3aed' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('postBinType_withMissingColour_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Purple', label: 'Mixed' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('postBinType_withInvalidColour_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Purple', label: 'Mixed', colour: 'not-a-colour' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/colour/i);
+  });
+
+  test('postBinType_withSummaryMatchContainingWildcard_stripsWildcards', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '%Gr_ey%', label: 'General', colour: '#6b7280' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.summary_match).toBe('Grey');
+  });
+
+  // --- PUT /api/bin-types/:id ---
+
+  test('putBinType_withValidData_returns200', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 1 });
+
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Grey', label: 'General Waste Updated', colour: '#6b7280' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  test('putBinType_withUnknownId_returns404', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 0 });
+
+    const res = await request(app)
+      .put('/api/bin-types/999')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(404);
+  });
+
+  test('putBinType_withMissingFields_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Grey' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('putBinType_withInvalidColour_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: 'red' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/colour/i);
+  });
+
+  test('putBinType_withSummaryMatchContainingWildcard_stripsWildcards', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 1 });
+
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: '_Grey%', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(200);
+  });
+
+  // --- DELETE /api/bin-types/:id ---
+
+  test('deleteBinType_returns204', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 1 });
+
+    const res = await request(app).delete('/api/bin-types/1');
+
+    expect(res.status).toBe(204);
+  });
+
+  test('deleteBinType_withUnknownId_returns404', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 0 });
+
+    const res = await request(app).delete('/api/bin-types/999');
+
+    expect(res.status).toBe(404);
+  });
 });

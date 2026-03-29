@@ -6,8 +6,10 @@ function createTestDb() {
   const db = new Database(':memory:');
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  const sql = fs.readFileSync(path.join(__dirname, '../../src/migrations/001.sql'), 'utf8');
-  db.exec(sql);
+  for (const file of ['001.sql', '002.sql', '003.sql']) {
+    const sql = fs.readFileSync(path.join(__dirname, '../../src/migrations', file), 'utf8');
+    db.exec(sql);
+  }
   return db;
 }
 

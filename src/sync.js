@@ -15,6 +15,7 @@ async function runSync() {
       const result = db.prepare("INSERT INTO sync_runs (status) VALUES ('running')").run();
       runId = result.lastInsertRowid;
     })();
+
   } catch (err) {
     if (err.code === 'ALREADY_RUNNING') return { status: 429, message: 'Sync already in progress' };
     throw err;
@@ -23,6 +24,9 @@ async function runSync() {
   const updateRun = (status, error = null) =>
     db.prepare("UPDATE sync_runs SET status = ?, error = ?, completed_at = datetime('now') WHERE id = ?")
       .run(status, error, runId);
+
+  // Prune all past events at the start of each run
+  db.prepare("DELETE FROM events WHERE start_date < date('now')").run();
 
   try {
     const properties = db.prepare(
@@ -101,6 +105,7 @@ async function syncProperty(db, runId, property) {
     }
 
     updateCredentialStatus(db, property.id, 'ok');
+    cacheEvents(db, property.id, events);
     writeResult(db, runId, property.id, added, skipped, warnings.join('; ') || null, startedAt);
     return { propertyId: property.id };
   } catch (err) {
@@ -123,4 +128,27 @@ function purgeOldRecords(db) {
   db.prepare("DELETE FROM sync_runs WHERE completed_at < datetime('now', '-90 days')").run();
 }
 
-module.exports = { runSync };
+function cacheEvents(db, propertyId, events) {
+  const sixMonthsAhead = new Date();
+  sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const upsert = db.prepare(
+    "INSERT OR REPLACE INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, ?, ?, ?, ?)"
+  );
+
+  const insertAll = db.transaction(() => {
+    for (const event of events) {
+      const start = new Date(event.start);
+      if (start < today || start > sixMonthsAhead) continue;
+      const startDate = start.toISOString().slice(0, 10);
+      const endDate = event.end ? new Date(event.end).toISOString().slice(0, 10) : null;
+      upsert.run(propertyId, event.uid, event.summary, startDate, endDate);
+    }
+  });
+
+  insertAll();
+}
+
+module.exports = { runSync, cacheEvents };

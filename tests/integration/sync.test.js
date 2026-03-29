@@ -307,6 +307,56 @@ describe('sync', () => {
     expect(invalidRun).toBeUndefined();
   });
 
+  test('runSync_atStart_prunesPastEventsFromDb', async () => {
+    // Verify the DELETE FROM events WHERE start_date < date('now') is issued
+    await runSync();
+
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const pruneCall = calls.find(q => q.includes("DELETE FROM events") && q.includes("start_date"));
+    expect(pruneCall).toBeDefined();
+  });
+
+  test('runSync_onSuccessfulPropertySync_cachesEvents', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-001', summary: 'Grey Bin',
+        start: new Date(Date.now() + 86400000 * 30),
+        end: new Date(Date.now() + 86400000 * 30),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    // Verify an INSERT OR REPLACE INTO events was issued
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const cacheCall = calls.find(q => q.includes('INSERT OR REPLACE INTO events'));
+    expect(cacheCall).toBeDefined();
+  });
+
+  test('runSync_onPropertyFailure_doesNotCacheEvents', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockRejectedValue(new Error('ICS fetch failed'));
+
+    await runSync();
+
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const cacheCall = calls.find(q => q.includes('INSERT OR REPLACE INTO events'));
+    expect(cacheCall).toBeUndefined();
+  });
+
   test('runSync_onHttp401Error_setsCredentialStatusInvalid', async () => {
     const property = {
       id: 1,
