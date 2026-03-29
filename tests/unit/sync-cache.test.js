@@ -96,6 +96,20 @@ describe('cacheEvents', () => {
     const row = db.prepare("SELECT start_date FROM events WHERE uid = 'uid-1'").get();
     expect(row.start_date).toBe('2026-06-15');
   });
+
+  test('cacheEvents_withMultipleEvents_insertsAllInSingleTransaction', () => {
+    const events = Array.from({ length: 5 }, (_, i) => ({
+      uid: `uid-${i}`,
+      summary: 'Grey Bin',
+      start: new Date(getFutureDate(10 + i)),
+      end: null,
+    }));
+
+    syncModule.cacheEvents(db, propertyId, events);
+
+    const rows = db.prepare('SELECT * FROM events WHERE property_id = ?').all(propertyId);
+    expect(rows).toHaveLength(5);
+  });
 });
 
 describe('runSync event cache integration', () => {

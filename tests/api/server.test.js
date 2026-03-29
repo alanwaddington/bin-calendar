@@ -598,6 +598,24 @@ describe('server API', () => {
     expect(res.status).toBe(400);
   });
 
+  test('postBinType_withInvalidColour_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Purple', label: 'Mixed', colour: 'not-a-colour' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/colour/i);
+  });
+
+  test('postBinType_withSummaryMatchContainingWildcard_stripsWildcards', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '%Gr_ey%', label: 'General', colour: '#6b7280' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.summary_match).toBe('Grey');
+  });
+
   // --- PUT /api/bin-types/:id ---
 
   test('putBinType_withValidData_returns200', async () => {
@@ -627,6 +645,25 @@ describe('server API', () => {
       .send({ summary_match: 'Grey' });
 
     expect(res.status).toBe(400);
+  });
+
+  test('putBinType_withInvalidColour_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: 'red' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/colour/i);
+  });
+
+  test('putBinType_withSummaryMatchContainingWildcard_stripsWildcards', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 1 });
+
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: '_Grey%', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(200);
   });
 
   // --- DELETE /api/bin-types/:id ---

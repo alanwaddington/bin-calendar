@@ -235,21 +235,30 @@ app.get('/api/bin-types', (req, res) => {
   res.json(rows);
 });
 
+const HEX_COLOUR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function sanitiseBinTypeInput(body) {
+  const { summary_match, label, colour } = body;
+  if (!summary_match || !label || !colour) return { error: 'Missing fields: summary_match, label, colour required' };
+  if (!HEX_COLOUR_RE.test(colour)) return { error: 'Invalid colour: must be a 6-digit hex value (e.g. #6b7280)' };
+  return { summary_match: summary_match.replace(/[%_]/g, ''), label, colour };
+}
+
 app.post('/api/bin-types', (req, res) => {
-  const { summary_match, label, colour } = req.body;
-  if (!summary_match || !label || !colour) return res.status(400).json({ error: 'Missing fields: summary_match, label, colour required' });
+  const input = sanitiseBinTypeInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
   const result = getDb().prepare(
     'INSERT INTO bin_types (summary_match, label, colour) VALUES (?, ?, ?)'
-  ).run(summary_match, label, colour);
-  res.status(201).json({ id: result.lastInsertRowid, summary_match, label, colour });
+  ).run(input.summary_match, input.label, input.colour);
+  res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour });
 });
 
 app.put('/api/bin-types/:id', (req, res) => {
-  const { summary_match, label, colour } = req.body;
-  if (!summary_match || !label || !colour) return res.status(400).json({ error: 'Missing fields: summary_match, label, colour required' });
+  const input = sanitiseBinTypeInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
   const result = getDb().prepare(
     'UPDATE bin_types SET summary_match = ?, label = ?, colour = ? WHERE id = ?'
-  ).run(summary_match, label, colour, req.params.id);
+  ).run(input.summary_match, input.label, input.colour, req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
   res.json({ ok: true });
 });

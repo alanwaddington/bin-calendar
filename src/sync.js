@@ -138,13 +138,17 @@ function cacheEvents(db, propertyId, events) {
     "INSERT OR REPLACE INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, ?, ?, ?, ?)"
   );
 
-  for (const event of events) {
-    const start = new Date(event.start);
-    if (start < today || start > sixMonthsAhead) continue;
-    const startDate = start.toISOString().slice(0, 10);
-    const endDate = event.end ? new Date(event.end).toISOString().slice(0, 10) : null;
-    upsert.run(propertyId, event.uid, event.summary, startDate, endDate);
-  }
+  const insertAll = db.transaction(() => {
+    for (const event of events) {
+      const start = new Date(event.start);
+      if (start < today || start > sixMonthsAhead) continue;
+      const startDate = start.toISOString().slice(0, 10);
+      const endDate = event.end ? new Date(event.end).toISOString().slice(0, 10) : null;
+      upsert.run(propertyId, event.uid, event.summary, startDate, endDate);
+    }
+  });
+
+  insertAll();
 }
 
 module.exports = { runSync, cacheEvents };
