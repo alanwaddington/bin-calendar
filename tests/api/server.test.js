@@ -420,6 +420,19 @@ describe('server API', () => {
 
   // --- GET /api/next-collection ---
 
+  test('getNextCollection_daysUntilSql_usesDateNowNotNow', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/next-collection');
+
+    const prepareCalls = getDb().prepare.mock.calls.map(args => args[0]);
+    const sql = prepareCalls.find(s => s.includes('days_until'));
+    expect(sql).toBeDefined();
+    expect(sql).toMatch(/julianday\(date\('now'\)\)/);
+    expect(sql).not.toMatch(/julianday\('now'\)/);
+  });
+
+
   test('getNextCollection_withEvents_returns200WithCollections', async () => {
     mockPrepare.all.mockReturnValueOnce([
       {

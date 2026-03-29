@@ -199,7 +199,7 @@ app.get('/api/next-collection', (req, res) => {
   const rows = getDb().prepare(`
     SELECT
       e.start_date        AS date,
-      CAST((julianday(e.start_date) - julianday('now')) AS INTEGER) AS days_until,
+      CAST((julianday(e.start_date) - julianday(date('now'))) AS INTEGER) AS days_until,
       e.summary,
       bt.label            AS label,
       bt.colour           AS colour,
