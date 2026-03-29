@@ -21,6 +21,12 @@ async function loadSettings() {
     renderPropertyAccordions(),
     renderBinTypes(),
   ]);
+
+  if (window._settingsTargetPropertyId) {
+    const id = window._settingsTargetPropertyId;
+    window._settingsTargetPropertyId = null;
+    toggleAccordion(`acc-prop-${id}`);
+  }
 }
 
 // ── Exclusive accordion toggle ─────────────────────────────────

@@ -113,7 +113,7 @@ function renderPropertyTiles(properties) {
     const calType = p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud';
 
     return `
-      <button class="property-tile status-${escAttr(statusClass)}" onclick="navigate('settings')">
+      <button class="property-tile status-${escAttr(statusClass)}" onclick="navigateToProperty(${p.id})">
         <div class="tile-label">${escHtml(p.label)}</div>
         <div class="tile-type">${escHtml(calType)}</div>
         <div class="tile-status">${escHtml(statusText)}</div>
@@ -196,6 +196,11 @@ async function syncNow() {
       btn.textContent = 'Sync Now';
     }
   }
+}
+
+function navigateToProperty(propertyId) {
+  window._settingsTargetPropertyId = propertyId;
+  navigate('settings');
 }
 
 function escHtml(str) {
