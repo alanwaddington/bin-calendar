@@ -59,7 +59,6 @@ cp .env.example .env
 | `GOOGLE_CLIENT_ID` | For Google | OAuth2 client ID from Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | For Google | OAuth2 client secret |
 | `GOOGLE_REDIRECT_URI` | For Google | Must match the URI whitelisted in Google Cloud Console |
-| `GETADDRESS_API_KEY` | Optional | getAddress.io API key for address/UPRN lookup |
 | `PORT` | Optional | HTTP port (default: 3000) |
 
 ## Deployment (Synology NAS)
@@ -94,7 +93,6 @@ cp .env.example .env
          GOOGLE_CLIENT_ID: <optional>
          GOOGLE_CLIENT_SECRET: <optional>
          GOOGLE_REDIRECT_URI: http://<nas-ip>:3000/auth/google/callback
-         GETADDRESS_API_KEY: <optional>
    ```
 
 5. Start:
