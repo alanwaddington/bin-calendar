@@ -6,23 +6,32 @@
   <title>bin-calendar</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="layout">
-    <nav class="sidebar">
-      <div class="sidebar-title">bin-calendar</div>
-      <a href="#dashboard" class="nav-link active" data-view="dashboard">Dashboard</a>
-      <a href="#properties" class="nav-link" data-view="properties">Properties</a>
+  <header class="topnav">
+    <a href="#dashboard" class="topnav-brand" data-view="dashboard">
+      <svg class="topnav-brand-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="4" y="6" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 6V4.5C8 3.67 8.67 3 9.5 3h1C11.33 3 12 3.67 12 4.5V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M2 6h16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M8 10v4M12 10v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>bin-calendar</span>
+    </a>
+    <nav class="topnav-links">
+      <a href="#settings" class="nav-link" data-view="settings">Settings</a>
       <a href="#logs" class="nav-link" data-view="logs">Logs</a>
     </nav>
-    <main class="content">
-      <div id="view-dashboard" class="view"></div>
-      <div id="view-properties" class="view hidden"></div>
-      <div id="view-logs" class="view hidden"></div>
-    </main>
-  </div>
+  </header>
+
+  <main class="page-content">
+    <div id="view-dashboard" class="view"></div>
+    <div id="view-settings" class="view hidden"></div>
+    <div id="view-logs" class="view hidden"></div>
+  </main>
+
   <script src="/app.js"></script>
   <script src="/dashboard.js"></script>
   <script src="/properties.js"></script>

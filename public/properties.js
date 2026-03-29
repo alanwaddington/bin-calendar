@@ -1,8 +1,8 @@
-registerView('properties', loadProperties);
+registerView('settings', loadProperties);
 
 
 async function loadProperties() {
-  const el = document.getElementById('view-properties');
+  const el = document.getElementById('view-settings');
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-lg)">
       <h1>Properties</h1>

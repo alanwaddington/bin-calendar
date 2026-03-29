@@ -16,7 +16,7 @@ async function api(method, path, body) {
 const viewLoaders = {};
 
 function navigate(view) {
-  if (!['dashboard', 'properties', 'logs'].includes(view)) view = 'dashboard';
+  if (!['dashboard', 'settings', 'logs'].includes(view)) view = 'dashboard';
   document.querySelectorAll('.nav-link').forEach(a => {
     a.classList.toggle('active', a.dataset.view === view);
   });
