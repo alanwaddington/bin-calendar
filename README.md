@@ -176,7 +176,6 @@ Pull requests also run the test job (no Docker build).
 | POST | `/api/sync` | Trigger a manual sync |
 | GET | `/api/sync/runs` | Sync history |
 
-
 ## Data
 
 SQLite database stored at `/app/data/bin-calendar.db` (volume-mounted on NAS). Migrations run automatically at startup. Sync logs are retained for 90 days.
