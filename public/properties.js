@@ -1,267 +1,257 @@
-registerView('settings', loadProperties);
+registerView('settings', loadSettings);
 
+// ── State ──────────────────────────────────────────────────────
+let _settingsProperties = [];
+let _binTypes = [];
 
-async function loadProperties() {
+// ── Load ───────────────────────────────────────────────────────
+async function loadSettings() {
   const el = document.getElementById('view-settings');
   el.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-lg)">
-      <h1>Properties</h1>
-      <button class="btn btn-primary" onclick="openPropertyModal()">+ Add Property</button>
+    <div class="settings-section">
+      <div class="section-label">PROPERTIES</div>
+      <div id="property-accordions"></div>
     </div>
-    <div id="properties-table"></div>
-    <div class="modal-overlay hidden" id="property-modal" onclick="handleModalClick(event)">
-      <div class="modal">
-        <div class="modal-title" id="modal-title">Add Property</div>
-        <div id="modal-body"></div>
-      </div>
+    <div class="settings-section">
+      <div class="section-label">BIN TYPES</div>
+      <div id="bin-types-section"></div>
     </div>`;
-  await renderPropertiesTable();
+
+  await Promise.all([
+    renderPropertyAccordions(),
+    renderBinTypes(),
+  ]);
 }
 
-async function renderPropertiesTable() {
-  const properties = await api('GET', '/api/properties');
-  const el = document.getElementById('properties-table');
+// ── Exclusive accordion toggle ─────────────────────────────────
+function toggleAccordion(id) {
+  const all = document.querySelectorAll('#property-accordions .accordion');
+  let opened = false;
+  all.forEach(acc => {
+    const body = acc.querySelector('.accordion-body');
+    if (acc.id === id) {
+      const isOpen = acc.classList.contains('open');
+      if (isOpen) {
+        acc.classList.remove('open');
+        if (body) body.classList.remove('open');
+      } else {
+        acc.classList.add('open');
+        if (body) body.classList.add('open');
+        opened = true;
+      }
+    } else {
+      acc.classList.remove('open');
+      if (body) body.classList.remove('open');
+    }
+  });
+  // Lazy-load Google calendar picker when opening a property accordion
+  if (opened && id.startsWith('acc-prop-')) {
+    const propId = parseInt(id.replace('acc-prop-', ''), 10);
+    const p = _settingsProperties.find(prop => prop.id === propId);
+    if (p && p.connected && p.calendar_type === 'google') {
+      loadGoogleCalendarsForProp(propId, p.calendar_id);
+    }
+  }
+}
+
+// ── Properties ─────────────────────────────────────────────────
+async function renderPropertyAccordions() {
+  try {
+    _settingsProperties = await api('GET', '/api/properties');
+  } catch (err) {
+    const el = document.getElementById('property-accordions');
+    if (el) el.innerHTML = `<p class="form-error">Failed to load properties: ${escHtml(err.message)}</p>`;
+    return;
+  }
+
+  const el = document.getElementById('property-accordions');
   if (!el) return;
 
-  if (properties.length === 0) {
-    el.innerHTML = '<p style="color:var(--text-3);padding:var(--space-md) 0">No properties yet. Click "+ Add Property" to get started.</p>';
-    return;
-  }
-
-  el.innerHTML = `<table>
-    <thead><tr><th>Label</th><th>UPRN</th><th>Calendar</th><th>Status</th><th>Actions</th></tr></thead>
-    <tbody>${properties.map(p => {
-      const connected = !!p.connected;
-      const credInvalid = connected && p.credential_status === 'invalid';
-      const checkedAt = p.credential_checked_at
-        ? new Date(p.credential_checked_at + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-        : null;
-      return `<tr>
-        <td style="color:var(--text);font-weight:500">${escHtml(p.label)}</td>
-        <td><code>${escHtml(p.uprn)}</code></td>
-        <td style="color:var(--text-2)">${p.calendar_type === 'google' ? 'Google' : 'iCloud'}</td>
-        <td>
-          ${credInvalid
-            ? '<span class="badge badge-error">Credentials expired</span>'
-            : connected
-              ? '<span class="badge badge-success">Connected</span>'
-              : '<span class="badge badge-warning">Not connected</span>'}
-          ${checkedAt ? `<br><span style="font-size:11px;color:var(--text-3)">Checked ${escHtml(checkedAt)}</span>` : ''}
-        </td>
-        <td style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-sm btn-secondary" onclick='openEditModal(${JSON.stringify(p)})'>Edit</button>
-          ${p.calendar_type === 'google'
-            ? `<button class="btn btn-sm btn-secondary" onclick="reconnectGoogle(${p.id})">Reconnect</button>`
-            : credInvalid
-              ? `<button class="btn btn-sm btn-secondary" onclick="reconnectIcloud(${p.id})">Reconnect</button>`
-              : ''}
-          <button class="btn btn-sm btn-danger" onclick="deleteProperty(${p.id}, '${escAttr(p.label)}')">Delete</button>
-        </td>
-      </tr>`;
-    }).join('')}</tbody>
-  </table>`;
+  const accordions = _settingsProperties.map(p => buildPropertyAccordion(p)).join('');
+  el.innerHTML = accordions + buildAddPropertyAccordion();
 }
 
-function openPropertyModal() {
-  document.getElementById('modal-title').textContent = 'Add Property';
-  document.getElementById('property-modal').classList.remove('hidden');
-  renderPropertyForm();
+function getStatusBadge(p) {
+  if (!p.connected) return '<span class="badge badge-warning">Not connected</span>';
+  if (p.credential_status === 'invalid') return '<span class="badge badge-error">Credentials expired</span>';
+  if (p.credential_status === 'unknown') return '<span class="badge badge-warning">Needs attention</span>';
+  return '<span class="badge badge-success">Connected</span>';
 }
 
-function closeModal() {
-  const overlay = document.getElementById('property-modal');
-  overlay.classList.add('closing');
-  overlay.addEventListener('animationend', (e) => {
-    if (e.target !== overlay) return;
-    overlay.classList.add('hidden');
-    overlay.classList.remove('closing');
-  }, { once: true });
-}
+function buildPropertyAccordion(p) {
+  const calType = p.calendar_type === 'google' ? 'Google Calendar' : 'iCloud';
+  const needsReconnect = !p.connected || p.credential_status === 'invalid';
+  const showCalPicker = p.connected && p.calendar_type === 'google';
 
-function handleModalClick(event) {
-  if (event.target === event.currentTarget) closeModal();
-}
-
-function renderPropertyForm() {
-  const body = document.getElementById('modal-body');
-  const hasLookup = CONFIG.addressLookupConfigured;
-  const hasGoogle = CONFIG.googleConfigured;
-
-  body.innerHTML = `
-    ${hasLookup ? `
-    <div class="form-group">
-      <label>Find address by postcode</label>
-      <div style="display:flex;gap:8px">
-        <input id="postcode-input" placeholder="e.g. KA1 1AB" style="flex:1">
-        <button class="btn btn-secondary" type="button" onclick="lookupAddress()">Search</button>
-      </div>
-      <div id="address-results" style="margin-top:6px;font-size:12px;color:var(--text-3)"></div>
-    </div>` : ''}
-    <div class="form-group">
-      <label>Label</label>
-      <input id="prop-label" placeholder="e.g. Home">
-    </div>
-    <div class="form-group">
-      <label>UPRN</label>
-      <input id="prop-uprn" placeholder="e.g. 127053058">
-    </div>
-    <div class="form-group">
-      <label>Calendar type</label>
-      <select id="prop-type" onchange="renderCalendarFields()">
-        <option value="">Select...</option>
-        <option value="google" ${!hasGoogle ? 'disabled' : ''}>
-          Google Calendar${!hasGoogle ? ' (not configured — set GOOGLE_CLIENT_ID/SECRET)' : ''}
-        </option>
-        <option value="icloud">iCloud</option>
-      </select>
-    </div>
-    <div id="calendar-fields"></div>
-    <div id="form-error" class="form-error"></div>`;
-}
-
-function renderCalendarFields() {
-  const type = document.getElementById('prop-type').value;
-  const el = document.getElementById('calendar-fields');
-  document.getElementById('form-error').textContent = '';
-
-  if (type === 'google') {
-    el.innerHTML = `
-      <div id="google-step-1">
-        <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
-          Save your property first, then authorise Google Calendar access in a new tab.
-        </p>
-        <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveAndGetGoogleUrl()">Save &amp; Get Auth Link</button>
-          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+  return `
+    <div class="accordion" id="acc-prop-${p.id}">
+      <div class="accordion-header" onclick="toggleAccordion('acc-prop-${p.id}')">
+        <div class="accordion-header-left">
+          <div>
+            <div class="accordion-title">${escHtml(p.label)}</div>
+            <div class="accordion-subtitle">${escHtml(calType)} &middot; ${getStatusBadge(p)}</div>
+          </div>
         </div>
+        <svg class="accordion-chevron" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
       </div>
-      <div id="google-step-2" style="display:none">
-        <p style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text)">Step 1 — Authorise Google Calendar</p>
-        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">
-          Click the link below to open Google's authorisation page in a new tab.
-          After you approve access, Google will redirect to a page that won't load — that's expected.
+      <div class="accordion-body" id="acc-prop-body-${p.id}">
+        <div class="form-group">
+          <label>Label</label>
+          <input id="prop-label-${p.id}" value="${escAttr(p.label)}">
+        </div>
+        <div class="form-group">
+          <label>UPRN</label>
+          <input id="prop-uprn-${p.id}" value="${escAttr(p.uprn)}">
+        </div>
+        <div class="form-group">
+          <label>Calendar type</label>
+          <input value="${escAttr(calType)}" disabled style="background:var(--surface);color:var(--text-3)">
+        </div>
+        ${showCalPicker ? `
+        <div class="form-group">
+          <label>Calendar</label>
+          <select id="cal-select-${p.id}" style="width:100%">
+            <option value="">Loading calendars\u2026</option>
+          </select>
+        </div>` : ''}
+        <div id="prop-save-error-${p.id}" class="form-error"></div>
+        <div class="form-actions" style="flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="savePropertyEdit(${p.id})">Save</button>
+          ${needsReconnect ? (p.calendar_type === 'google'
+            ? `<button class="btn btn-secondary btn-sm" onclick="showGoogleReconnect(${p.id})">Reconnect Google</button>`
+            : `<button class="btn btn-secondary btn-sm" onclick="showIcloudReconnect(${p.id})">Reconnect iCloud</button>`
+          ) : ''}
+          <button class="btn btn-danger btn-sm" id="del-btn-${p.id}" onclick="confirmDeleteProperty(${p.id})">Delete</button>
+        </div>
+        <div id="prop-reconnect-${p.id}"></div>
+      </div>
+    </div>`;
+}
+
+async function loadGoogleCalendarsForProp(propertyId, currentCalendarId) {
+  const sel = document.getElementById(`cal-select-${propertyId}`);
+  if (!sel) return;
+  try {
+    const cals = await api('GET', `/api/google/calendars/${propertyId}`);
+    sel.innerHTML = cals.map(c =>
+      `<option value="${escAttr(c.id)}"${c.id === currentCalendarId ? ' selected' : ''}>${escHtml(c.summary)}${c.primary ? ' (default)' : ''}</option>`
+    ).join('');
+  } catch (err) {
+    sel.outerHTML = `<span class="form-error">Could not load calendars: ${escHtml(err.message)}</span>`;
+  }
+}
+
+async function savePropertyEdit(id) {
+  const label = document.getElementById(`prop-label-${id}`)?.value.trim();
+  const uprn = document.getElementById(`prop-uprn-${id}`)?.value.trim();
+  const errorEl = document.getElementById(`prop-save-error-${id}`);
+  if (!label || !uprn) { errorEl.textContent = 'Label and UPRN are required'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('PUT', `/api/properties/${id}`, { label, uprn });
+    const p = _settingsProperties.find(prop => prop.id === id);
+    if (p && p.connected && p.calendar_type === 'google') {
+      const calSel = document.getElementById(`cal-select-${id}`);
+      if (calSel?.value) {
+        await api('PUT', `/api/properties/${id}/calendar`, { calendar_id: calSel.value });
+      }
+    }
+    showToast('Property updated');
+    await renderPropertyAccordions();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+function confirmDeleteProperty(id) {
+  const btn = document.getElementById(`del-btn-${id}`);
+  if (!btn) return;
+  btn.outerHTML = `
+    <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--danger)">
+      Confirm delete?
+      <button class="btn btn-danger btn-sm" onclick="doDeleteProperty(${id})">Yes</button>
+      <button class="btn btn-secondary btn-sm" onclick="renderPropertyAccordions()">Cancel</button>
+    </span>`;
+}
+
+async function doDeleteProperty(id) {
+  try {
+    await api('DELETE', `/api/properties/${id}`);
+    showToast('Property deleted');
+    await renderPropertyAccordions();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ── Google reconnect (inline) ──────────────────────────────────
+async function showGoogleReconnect(id) {
+  const el = document.getElementById(`prop-reconnect-${id}`);
+  if (!el) return;
+  el.innerHTML = `
+    <div style="border-top:1px solid var(--border);margin-top:var(--space-md);padding-top:var(--space-md)">
+      <div id="grecon-step1-${id}">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:var(--space-sm)">
+          Click below to get a Google authorisation link.
         </p>
-        <a id="google-auth-link" href="#" target="_blank" rel="noopener"
-           style="display:inline-block;margin-bottom:16px;font-size:13px">
+        <button class="btn btn-secondary btn-sm" onclick="startGoogleReconnect(${id})">Get Auth Link</button>
+      </div>
+      <div id="grecon-step2-${id}" style="display:none">
+        <p style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">Step 1 \u2014 Authorise Google Calendar</p>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:8px">
+          Open the link below in a new tab. After approving, Google redirects to a page that won&rsquo;t load &mdash; that&rsquo;s expected.
+        </p>
+        <a id="grecon-auth-link-${id}" href="#" target="_blank" rel="noopener"
+           style="display:inline-block;margin-bottom:var(--space-md);font-size:13px">
           Open Google authorisation &rarr;
         </a>
-        <p style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text)">Step 2 — Paste the URL</p>
+        <p style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text)">Step 2 \u2014 Paste the URL</p>
         <p style="font-size:12px;color:var(--text-3);margin-bottom:8px">
-          Copy the full URL from your browser's address bar (starting with <code>http://localhost...</code>) and paste it below.
+          Copy the full URL from your browser&rsquo;s address bar and paste it below.
         </p>
         <div class="form-group">
-          <input id="google-callback-url" placeholder="http://localhost:3000/auth/google/callback?code=...">
+          <input id="grecon-url-${id}" placeholder="http://localhost:3000/auth/google/callback?code=\u2026">
         </div>
-        <div id="google-complete-error" class="form-error"></div>
-        <div class="form-actions">
-          <button class="btn btn-primary" onclick="completeGoogleAuth()">Complete Connection</button>
-          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        </div>
+        <div id="grecon-step2-error-${id}" class="form-error"></div>
+        <button class="btn btn-primary btn-sm" onclick="completeGoogleReconnect(${id})">Complete Connection</button>
       </div>
-      <div id="google-step-3" style="display:none">
-        <p style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text)">Step 3 — Select Calendar</p>
-        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">Choose which Google Calendar to sync bin collections into.</p>
+      <div id="grecon-step3-${id}" style="display:none">
+        <p style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">Step 3 \u2014 Select Calendar</p>
         <div class="form-group">
-          <select id="google-calendar-select" style="width:100%">
-            <option value="">Loading calendars...</option>
+          <select id="grecon-cal-${id}" style="width:100%">
+            <option value="">Loading calendars\u2026</option>
           </select>
         </div>
-        <div id="google-step-3-error" class="form-error"></div>
-        <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveGoogleCalendar()">Save</button>
-          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        </div>
-      </div>`;
-  } else if (type === 'icloud') {
-    el.innerHTML = `
-      <div class="form-group">
-        <label>Apple ID</label>
-        <input id="apple-id" type="email" placeholder="you@example.com">
+        <div id="grecon-step3-error-${id}" class="form-error"></div>
+        <button class="btn btn-primary btn-sm" onclick="saveGoogleReconnectCalendar(${id})">Save</button>
       </div>
-      <div class="form-group">
-        <label>
-          App-specific password
-          <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noopener"
-             style="font-weight:normal;font-size:11px;margin-left:6px">Generate at appleid.apple.com</a>
-        </label>
-        <input id="apple-pass" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
-      </div>
-      <div class="form-group">
-        <button class="btn btn-secondary" type="button" onclick="fetchIcloudCalendars()">Fetch Calendars</button>
-        <div id="calendar-select" style="margin-top:8px"></div>
-      </div>
-      <div class="form-actions">
-        <button class="btn btn-primary" onclick="saveIcloud()">Save</button>
-        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-      </div>`;
-  } else {
-    el.innerHTML = '';
-  }
+    </div>`;
 }
 
-async function lookupAddress() {
-  const postcode = document.getElementById('postcode-input')?.value.trim();
-  const el = document.getElementById('address-results');
-  if (!postcode) { el.textContent = 'Enter a postcode first'; return; }
-  el.textContent = 'Searching...';
+async function startGoogleReconnect(id) {
   try {
-    const suggestions = await api('GET', `/api/uprn/lookup?postcode=${encodeURIComponent(postcode)}`);
-    if (suggestions.length === 0) {
-      el.textContent = 'No addresses found for that postcode';
-      return;
-    }
-    el.innerHTML = `<select id="address-select" style="width:100%;margin-top:4px">
-      <option value="">Select address...</option>
-      ${suggestions.map(s => `<option value="${escAttr(s.id)}">${escHtml(s.address)}</option>`).join('')}
-    </select>`;
-    document.getElementById('address-select').addEventListener('change', async function () {
-      if (!this.value) return;
-      try {
-        const detail = await api('GET', `/api/uprn/detail?id=${encodeURIComponent(this.value)}`);
-        if (detail.uprn) document.getElementById('prop-uprn').value = detail.uprn;
-      } catch (err) {
-        el.textContent = `Could not retrieve UPRN: ${err.message}`;
-      }
-    });
-  } catch {
-    el.textContent = 'Address lookup unavailable — enter your UPRN manually';
-  }
-}
-
-async function saveAndGetGoogleUrl() {
-  const label = document.getElementById('prop-label')?.value.trim();
-  const uprn = document.getElementById('prop-uprn')?.value.trim();
-  if (!label || !uprn) {
-    document.getElementById('form-error').textContent = 'Label and UPRN are required';
-    return;
-  }
-  try {
-    const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'google' });
     const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
-    document.getElementById('google-auth-link').href = authUrl;
-    document.getElementById('google-step-1').style.display = 'none';
-    document.getElementById('google-step-2').style.display = 'block';
-    // Store property id for the complete step
-    document.getElementById('google-step-2').dataset.propertyId = id;
+    document.getElementById(`grecon-auth-link-${id}`).href = authUrl;
+    document.getElementById(`grecon-step1-${id}`).style.display = 'none';
+    document.getElementById(`grecon-step2-${id}`).style.display = 'block';
   } catch (err) {
-    document.getElementById('form-error').textContent = err.message;
+    showToast(err.message, 'error');
   }
 }
 
-async function completeGoogleAuth() {
-  const pastedUrl = document.getElementById('google-callback-url')?.value.trim();
-  const errorEl = document.getElementById('google-complete-error');
+async function completeGoogleReconnect(id) {
+  const pastedUrl = document.getElementById(`grecon-url-${id}`)?.value.trim();
+  const errorEl = document.getElementById(`grecon-step2-error-${id}`);
   if (!pastedUrl) { errorEl.textContent = 'Paste the URL from your browser first'; return; }
   errorEl.textContent = '';
   try {
     await api('POST', '/api/google/complete', { pastedUrl });
-    const propertyId = document.getElementById('google-step-2').dataset.propertyId;
-    document.getElementById('google-step-2').style.display = 'none';
-    document.getElementById('google-step-3').style.display = 'block';
-    document.getElementById('google-step-3').dataset.propertyId = propertyId;
-    // Load calendars
-    const cals = await api('GET', `/api/google/calendars/${propertyId}`);
-    const sel = document.getElementById('google-calendar-select');
+    document.getElementById(`grecon-step2-${id}`).style.display = 'none';
+    document.getElementById(`grecon-step3-${id}`).style.display = 'block';
+    const cals = await api('GET', `/api/google/calendars/${id}`);
+    const sel = document.getElementById(`grecon-cal-${id}`);
     sel.innerHTML = cals.map(c =>
       `<option value="${escAttr(c.id)}"${c.primary ? ' selected' : ''}>${escHtml(c.summary)}${c.primary ? ' (default)' : ''}</option>`
     ).join('');
@@ -270,194 +260,55 @@ async function completeGoogleAuth() {
   }
 }
 
-async function saveGoogleCalendar() {
-  const propertyId = document.getElementById('google-step-3').dataset.propertyId;
-  const calendarId = document.getElementById('google-calendar-select').value;
-  const errorEl = document.getElementById('google-step-3-error');
-  if (!calendarId) { errorEl.textContent = 'Select a calendar'; return; }
+async function saveGoogleReconnectCalendar(id) {
+  const calId = document.getElementById(`grecon-cal-${id}`)?.value;
+  const errorEl = document.getElementById(`grecon-step3-error-${id}`);
+  if (!calId) { errorEl.textContent = 'Select a calendar'; return; }
   errorEl.textContent = '';
   try {
-    await api('PUT', `/api/properties/${propertyId}/calendar`, { calendar_id: calendarId });
-    closeModal();
-    showToast('Google Calendar connected');
-    await renderPropertiesTable();
+    await api('PUT', `/api/properties/${id}/calendar`, { calendar_id: calId });
+    showToast('Google Calendar reconnected');
+    await renderPropertyAccordions();
   } catch (err) {
     errorEl.textContent = err.message;
   }
 }
 
-async function fetchIcloudCalendars() {
-  const appleId = document.getElementById('apple-id')?.value.trim();
-  const pass = document.getElementById('apple-pass')?.value.trim();
-  const el = document.getElementById('calendar-select');
-  if (!appleId || !pass) { el.innerHTML = '<span style="color:var(--danger);font-size:12px">Enter Apple ID and password first</span>'; return; }
-  el.innerHTML = '<span style="font-size:12px;color:var(--text-3)">Fetching calendars...</span>';
-  try {
-    const cals = await api('POST', '/api/icloud/calendars', { apple_id: appleId, app_specific_password: pass });
-    if (cals.length === 0) { el.innerHTML = '<span style="font-size:12px;color:var(--danger)">No calendars found</span>'; return; }
-    el.innerHTML = `<label style="margin-top:8px">Select calendar</label>
-      <select id="cal-url" style="width:100%;margin-top:4px">
-        <option value="">Select...</option>
-        ${cals.map(c => `<option value="${escAttr(c.url)}">${escHtml(c.displayName)}</option>`).join('')}
-      </select>`;
-  } catch (err) {
-    el.innerHTML = `<span style="color:var(--danger);font-size:12px">Error: ${escHtml(err.message)}</span>`;
-  }
-}
-
-async function saveIcloud() {
-  const label = document.getElementById('prop-label')?.value.trim();
-  const uprn = document.getElementById('prop-uprn')?.value.trim();
-  const appleId = document.getElementById('apple-id')?.value.trim();
-  const pass = document.getElementById('apple-pass')?.value.trim();
-  const calUrl = document.getElementById('cal-url')?.value;
-  const errorEl = document.getElementById('form-error');
-
-  if (!label || !uprn || !appleId || !pass || !calUrl) {
-    errorEl.textContent = 'All fields are required — make sure you have fetched and selected a calendar';
-    return;
-  }
-  errorEl.textContent = '';
-  try {
-    const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'icloud' });
-    await api('POST', `/api/properties/${id}/icloud`, {
-      apple_id: appleId,
-      app_specific_password: pass,
-      calendar_url: calUrl,
-    });
-    closeModal();
-    showToast('iCloud calendar connected');
-    await renderPropertiesTable();
-  } catch (err) {
-    errorEl.textContent = err.message;
-  }
-}
-
-async function openEditModal(p) {
-  document.getElementById('modal-title').textContent = 'Edit Property';
-  document.getElementById('property-modal').classList.remove('hidden');
-  const body = document.getElementById('modal-body');
-  body.innerHTML = `
-    <div class="form-group">
-      <label>Label</label>
-      <input id="edit-label" value="${escAttr(p.label)}">
-    </div>
-    <div class="form-group">
-      <label>UPRN</label>
-      <input id="edit-uprn" value="${escAttr(p.uprn)}">
-    </div>
-    ${p.connected && p.calendar_type === 'google' ? `
-    <div class="form-group">
-      <label>Calendar</label>
-      <select id="edit-calendar" style="width:100%">
-        <option value="">Loading calendars...</option>
-      </select>
-    </div>` : ''}
-    <div id="edit-error" class="form-error"></div>
-    <div class="form-actions">
-      <button class="btn btn-primary" onclick="saveEdit(${p.id}, '${escAttr(p.calendar_type)}', ${!!p.connected})">Save</button>
-      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    </div>`;
-
-  if (p.connected && p.calendar_type === 'google') {
-    try {
-      const cals = await api('GET', `/api/google/calendars/${p.id}`);
-      const sel = document.getElementById('edit-calendar');
-      sel.innerHTML = cals.map(c =>
-        `<option value="${escAttr(c.id)}"${c.id === p.calendar_id ? ' selected' : ''}>${escHtml(c.summary)}${c.primary ? ' (default)' : ''}</option>`
-      ).join('');
-    } catch (err) {
-      document.getElementById('edit-error').textContent = `Could not load calendars: ${err.message}`;
-    }
-  }
-}
-
-async function saveEdit(id, calendarType, connected) {
-  const label = document.getElementById('edit-label')?.value.trim();
-  const uprn = document.getElementById('edit-uprn')?.value.trim();
-  const errorEl = document.getElementById('edit-error');
-  if (!label || !uprn) { errorEl.textContent = 'Label and UPRN are required'; return; }
-  errorEl.textContent = '';
-  try {
-    await api('PUT', `/api/properties/${id}`, { label, uprn });
-    if (connected && calendarType === 'google') {
-      const calendarId = document.getElementById('edit-calendar')?.value;
-      if (calendarId) await api('PUT', `/api/properties/${id}/calendar`, { calendar_id: calendarId });
-    }
-    closeModal();
-    showToast('Property updated');
-    await renderPropertiesTable();
-  } catch (err) {
-    errorEl.textContent = err.message;
-  }
-}
-
-async function deleteProperty(id, label) {
-  if (!confirm(`Delete "${label}"? Sync logs will be retained.`)) return;
-  try {
-    await api('DELETE', `/api/properties/${id}`);
-    await renderPropertiesTable();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-async function reconnectGoogle(id) {
-  openPropertyModal();
-  // Switch directly to step 2 for an existing property
-  document.getElementById('prop-type').value = 'google';
-  renderCalendarFields();
-  try {
-    const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
-    document.getElementById('google-auth-link').href = authUrl;
-    document.getElementById('google-step-1').style.display = 'none';
-    document.getElementById('google-step-2').style.display = 'block';
-    document.getElementById('google-step-2').dataset.propertyId = id;
-  } catch (err) {
-    document.getElementById('form-error').textContent = err.message;
-  }
-}
-
-async function reconnectIcloud(id) {
-  document.getElementById('modal-title').textContent = 'Reconnect iCloud';
-  document.getElementById('property-modal').classList.remove('hidden');
-  const body = document.getElementById('modal-body');
-  body.innerHTML = `
-    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">
-      Re-enter your Apple ID and app-specific password to restore the calendar connection.
-    </p>
-    <div class="form-group">
-      <label>Apple ID</label>
-      <input id="reconnect-apple-id" type="email" placeholder="you@example.com">
-    </div>
-    <div class="form-group">
-      <label>
-        App-specific password
-        <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noopener"
-           style="font-weight:normal;font-size:11px;margin-left:6px">Generate at appleid.apple.com</a>
-      </label>
-      <input id="reconnect-apple-pass" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
-    </div>
-    <div class="form-group">
-      <button class="btn btn-secondary" type="button" onclick="fetchReconnectIcloudCalendars()">Fetch Calendars</button>
-      <div id="reconnect-calendar-select" style="margin-top:8px"></div>
-    </div>
-    <div id="reconnect-error" class="form-error"></div>
-    <div class="form-actions">
-      <button class="btn btn-primary" onclick="saveReconnectIcloud(${id})">Save</button>
-      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+// ── iCloud reconnect (inline) ──────────────────────────────────
+function showIcloudReconnect(id) {
+  const el = document.getElementById(`prop-reconnect-${id}`);
+  if (!el) return;
+  el.innerHTML = `
+    <div style="border-top:1px solid var(--border);margin-top:var(--space-md);padding-top:var(--space-md)">
+      <div class="form-group">
+        <label>Apple ID</label>
+        <input id="irc-apple-id-${id}" type="email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label>App-specific password
+          <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noopener"
+             style="font-weight:normal;font-size:11px;margin-left:6px">Generate at appleid.apple.com</a>
+        </label>
+        <input id="irc-apple-pass-${id}" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
+      </div>
+      <div class="form-group">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="fetchIrcCalendars(${id})">Fetch Calendars</button>
+        <div id="irc-cal-select-${id}" style="margin-top:8px"></div>
+      </div>
+      <div id="irc-error-${id}" class="form-error"></div>
+      <button class="btn btn-primary btn-sm" onclick="saveIcloudReconnect(${id})">Save</button>
     </div>`;
 }
 
-async function fetchReconnectIcloudCalendars() {
-  const appleId = document.getElementById('reconnect-apple-id')?.value.trim();
-  const pass = document.getElementById('reconnect-apple-pass')?.value.trim();
-  const el = document.getElementById('reconnect-calendar-select');
+async function fetchIrcCalendars(id) {
+  const appleId = document.getElementById(`irc-apple-id-${id}`)?.value.trim();
+  const pass = document.getElementById(`irc-apple-pass-${id}`)?.value.trim();
+  const el = document.getElementById(`irc-cal-select-${id}`);
   if (!appleId || !pass) {
     el.innerHTML = '<span style="color:var(--danger);font-size:12px">Enter Apple ID and password first</span>';
     return;
   }
-  el.innerHTML = '<span style="font-size:12px;color:var(--text-3)">Fetching calendars...</span>';
+  el.innerHTML = '<span style="font-size:12px;color:var(--text-3)">Fetching calendars\u2026</span>';
   try {
     const cals = await api('POST', '/api/icloud/calendars', { apple_id: appleId, app_specific_password: pass });
     if (cals.length === 0) {
@@ -465,8 +316,8 @@ async function fetchReconnectIcloudCalendars() {
       return;
     }
     el.innerHTML = `<label style="margin-top:8px">Select calendar</label>
-      <select id="reconnect-cal-url" style="width:100%;margin-top:4px">
-        <option value="">Select...</option>
+      <select id="irc-cal-url-${id}" style="width:100%;margin-top:4px">
+        <option value="">Select\u2026</option>
         ${cals.map(c => `<option value="${escAttr(c.url)}">${escHtml(c.displayName)}</option>`).join('')}
       </select>`;
   } catch (err) {
@@ -474,34 +325,424 @@ async function fetchReconnectIcloudCalendars() {
   }
 }
 
-async function saveReconnectIcloud(id) {
-  const appleId = document.getElementById('reconnect-apple-id')?.value.trim();
-  const pass = document.getElementById('reconnect-apple-pass')?.value.trim();
-  const calUrl = document.getElementById('reconnect-cal-url')?.value;
-  const errorEl = document.getElementById('reconnect-error');
+async function saveIcloudReconnect(id) {
+  const appleId = document.getElementById(`irc-apple-id-${id}`)?.value.trim();
+  const pass = document.getElementById(`irc-apple-pass-${id}`)?.value.trim();
+  const calUrl = document.getElementById(`irc-cal-url-${id}`)?.value;
+  const errorEl = document.getElementById(`irc-error-${id}`);
   if (!appleId || !pass || !calUrl) {
-    errorEl.textContent = 'All fields are required — make sure you have fetched and selected a calendar';
+    errorEl.textContent = 'All fields are required \u2014 make sure you have fetched and selected a calendar';
     return;
   }
   errorEl.textContent = '';
   try {
     await api('POST', `/api/properties/${id}/icloud`, {
-      apple_id: appleId,
-      app_specific_password: pass,
-      calendar_url: calUrl,
+      apple_id: appleId, app_specific_password: pass, calendar_url: calUrl,
     });
-    closeModal();
     showToast('iCloud calendar reconnected');
-    await renderPropertiesTable();
+    await renderPropertyAccordions();
   } catch (err) {
     errorEl.textContent = err.message;
   }
 }
 
+// ── Add Property accordion ─────────────────────────────────────
+function buildAddPropertyAccordion() {
+  const hasLookup = CONFIG.addressLookupConfigured;
+  const hasGoogle = CONFIG.googleConfigured;
+  return `
+    <div class="accordion" id="acc-add-prop">
+      <div class="accordion-header" onclick="toggleAccordion('acc-add-prop')">
+        <div class="accordion-header-left">
+          <div>
+            <div class="accordion-title" style="color:var(--primary)">+ Add Property</div>
+            <div class="accordion-subtitle">Connect a new property to bin-calendar</div>
+          </div>
+        </div>
+        <svg class="accordion-chevron" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="accordion-body" id="acc-add-prop-body">
+        ${hasLookup ? `
+        <div class="form-group">
+          <label>Find address by postcode</label>
+          <div style="display:flex;gap:8px">
+            <input id="add-postcode" placeholder="e.g. KA1 1AB" style="flex:1">
+            <button class="btn btn-secondary btn-sm" type="button" onclick="addPropLookup()">Search</button>
+          </div>
+          <div id="add-address-results" style="margin-top:6px;font-size:12px;color:var(--text-3)"></div>
+        </div>` : ''}
+        <div class="form-group">
+          <label>Label</label>
+          <input id="add-label" placeholder="e.g. Home">
+        </div>
+        <div class="form-group">
+          <label>UPRN</label>
+          <input id="add-uprn" placeholder="e.g. 127053058">
+        </div>
+        <div class="form-group">
+          <label>Calendar type</label>
+          <select id="add-cal-type" onchange="renderAddCalendarFields()">
+            <option value="">Select\u2026</option>
+            <option value="google"${!hasGoogle ? ' disabled' : ''}>Google Calendar${!hasGoogle ? ' (not configured \u2014 set GOOGLE_CLIENT_ID/SECRET)' : ''}</option>
+            <option value="icloud">iCloud</option>
+          </select>
+        </div>
+        <div id="add-calendar-fields"></div>
+        <div id="add-form-error" class="form-error"></div>
+      </div>
+    </div>`;
+}
+
+async function addPropLookup() {
+  const postcode = document.getElementById('add-postcode')?.value.trim();
+  const el = document.getElementById('add-address-results');
+  if (!postcode) { el.textContent = 'Enter a postcode first'; return; }
+  el.textContent = 'Searching\u2026';
+  try {
+    const suggestions = await api('GET', `/api/uprn/lookup?postcode=${encodeURIComponent(postcode)}`);
+    if (suggestions.length === 0) { el.textContent = 'No addresses found for that postcode'; return; }
+    el.innerHTML = `<select id="add-address-select" style="width:100%;margin-top:4px">
+      <option value="">Select address\u2026</option>
+      ${suggestions.map(s => `<option value="${escAttr(s.id)}">${escHtml(s.address)}</option>`).join('')}
+    </select>`;
+    document.getElementById('add-address-select').addEventListener('change', async function () {
+      if (!this.value) return;
+      try {
+        const detail = await api('GET', `/api/uprn/detail?id=${encodeURIComponent(this.value)}`);
+        if (detail.uprn) document.getElementById('add-uprn').value = detail.uprn;
+      } catch (err) {
+        el.textContent = `Could not retrieve UPRN: ${err.message}`;
+      }
+    });
+  } catch {
+    el.textContent = 'Address lookup unavailable \u2014 enter your UPRN manually';
+  }
+}
+
+function renderAddCalendarFields() {
+  const type = document.getElementById('add-cal-type').value;
+  const el = document.getElementById('add-calendar-fields');
+  document.getElementById('add-form-error').textContent = '';
+
+  if (type === 'google') {
+    el.innerHTML = `
+      <div id="add-google-step1">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:var(--space-sm)">
+          Save your property first, then authorise Google Calendar access in a new tab.
+        </p>
+        <div class="form-actions">
+          <button class="btn btn-primary btn-sm" onclick="addSaveAndGetGoogleUrl()">Save &amp; Get Auth Link</button>
+        </div>
+      </div>
+      <div id="add-google-step2" style="display:none">
+        <p style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">Step 1 \u2014 Authorise Google Calendar</p>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:8px">
+          Click the link below. After approving, paste the redirect URL from your browser.
+        </p>
+        <a id="add-google-auth-link" href="#" target="_blank" rel="noopener"
+           style="display:inline-block;margin-bottom:var(--space-md);font-size:13px">
+          Open Google authorisation &rarr;
+        </a>
+        <p style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text)">Step 2 \u2014 Paste the URL</p>
+        <div class="form-group">
+          <input id="add-google-callback-url" placeholder="http://localhost:3000/auth/google/callback?code=\u2026">
+        </div>
+        <div id="add-google-step2-error" class="form-error"></div>
+        <button class="btn btn-primary btn-sm" onclick="addCompleteGoogleAuth()">Complete Connection</button>
+      </div>
+      <div id="add-google-step3" style="display:none">
+        <p style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">Step 3 \u2014 Select Calendar</p>
+        <div class="form-group">
+          <select id="add-google-cal-select" style="width:100%">
+            <option value="">Loading calendars\u2026</option>
+          </select>
+        </div>
+        <div id="add-google-step3-error" class="form-error"></div>
+        <button class="btn btn-primary btn-sm" onclick="addSaveGoogleCalendar()">Save</button>
+      </div>`;
+  } else if (type === 'icloud') {
+    el.innerHTML = `
+      <div class="form-group">
+        <label>Apple ID</label>
+        <input id="add-apple-id" type="email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label>App-specific password
+          <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noopener"
+             style="font-weight:normal;font-size:11px;margin-left:6px">Generate at appleid.apple.com</a>
+        </label>
+        <input id="add-apple-pass" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
+      </div>
+      <div class="form-group">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="addFetchIcloudCalendars()">Fetch Calendars</button>
+        <div id="add-cal-select" style="margin-top:8px"></div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary btn-sm" onclick="addSaveIcloud()">Save</button>
+      </div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function addSaveAndGetGoogleUrl() {
+  const label = document.getElementById('add-label')?.value.trim();
+  const uprn = document.getElementById('add-uprn')?.value.trim();
+  const errorEl = document.getElementById('add-form-error');
+  if (!label || !uprn) { errorEl.textContent = 'Label and UPRN are required'; return; }
+  errorEl.textContent = '';
+  try {
+    const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'google' });
+    const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
+    document.getElementById('add-google-auth-link').href = authUrl;
+    document.getElementById('add-google-step1').style.display = 'none';
+    document.getElementById('add-google-step2').style.display = 'block';
+    document.getElementById('add-google-step2').dataset.propertyId = id;
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function addCompleteGoogleAuth() {
+  const pastedUrl = document.getElementById('add-google-callback-url')?.value.trim();
+  const errorEl = document.getElementById('add-google-step2-error');
+  if (!pastedUrl) { errorEl.textContent = 'Paste the URL from your browser first'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('POST', '/api/google/complete', { pastedUrl });
+    const propertyId = document.getElementById('add-google-step2').dataset.propertyId;
+    document.getElementById('add-google-step2').style.display = 'none';
+    document.getElementById('add-google-step3').style.display = 'block';
+    document.getElementById('add-google-step3').dataset.propertyId = propertyId;
+    const cals = await api('GET', `/api/google/calendars/${propertyId}`);
+    const sel = document.getElementById('add-google-cal-select');
+    sel.innerHTML = cals.map(c =>
+      `<option value="${escAttr(c.id)}"${c.primary ? ' selected' : ''}>${escHtml(c.summary)}${c.primary ? ' (default)' : ''}</option>`
+    ).join('');
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function addSaveGoogleCalendar() {
+  const propertyId = document.getElementById('add-google-step3').dataset.propertyId;
+  const calendarId = document.getElementById('add-google-cal-select').value;
+  const errorEl = document.getElementById('add-google-step3-error');
+  if (!calendarId) { errorEl.textContent = 'Select a calendar'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('PUT', `/api/properties/${propertyId}/calendar`, { calendar_id: calendarId });
+    showToast('Google Calendar connected');
+    await renderPropertyAccordions();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function addFetchIcloudCalendars() {
+  const appleId = document.getElementById('add-apple-id')?.value.trim();
+  const pass = document.getElementById('add-apple-pass')?.value.trim();
+  const el = document.getElementById('add-cal-select');
+  if (!appleId || !pass) {
+    el.innerHTML = '<span style="color:var(--danger);font-size:12px">Enter Apple ID and password first</span>';
+    return;
+  }
+  el.innerHTML = '<span style="font-size:12px;color:var(--text-3)">Fetching calendars\u2026</span>';
+  try {
+    const cals = await api('POST', '/api/icloud/calendars', { apple_id: appleId, app_specific_password: pass });
+    if (cals.length === 0) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--danger)">No calendars found</span>';
+      return;
+    }
+    el.innerHTML = `<label style="margin-top:8px">Select calendar</label>
+      <select id="add-cal-url" style="width:100%;margin-top:4px">
+        <option value="">Select\u2026</option>
+        ${cals.map(c => `<option value="${escAttr(c.url)}">${escHtml(c.displayName)}</option>`).join('')}
+      </select>`;
+  } catch (err) {
+    el.innerHTML = `<span style="color:var(--danger);font-size:12px">Error: ${escHtml(err.message)}</span>`;
+  }
+}
+
+async function addSaveIcloud() {
+  const label = document.getElementById('add-label')?.value.trim();
+  const uprn = document.getElementById('add-uprn')?.value.trim();
+  const appleId = document.getElementById('add-apple-id')?.value.trim();
+  const pass = document.getElementById('add-apple-pass')?.value.trim();
+  const calUrl = document.getElementById('add-cal-url')?.value;
+  const errorEl = document.getElementById('add-form-error');
+  if (!label || !uprn || !appleId || !pass || !calUrl) {
+    errorEl.textContent = 'All fields are required \u2014 make sure you have fetched and selected a calendar';
+    return;
+  }
+  errorEl.textContent = '';
+  try {
+    const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'icloud' });
+    await api('POST', `/api/properties/${id}/icloud`, {
+      apple_id: appleId, app_specific_password: pass, calendar_url: calUrl,
+    });
+    showToast('iCloud calendar connected');
+    await renderPropertyAccordions();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+// ── Bin Types ──────────────────────────────────────────────────
+async function renderBinTypes() {
+  try {
+    _binTypes = await api('GET', '/api/bin-types');
+  } catch (err) {
+    const el = document.getElementById('bin-types-section');
+    if (el) el.innerHTML = `<p class="form-error">Failed to load bin types: ${escHtml(err.message)}</p>`;
+    return;
+  }
+
+  const el = document.getElementById('bin-types-section');
+  if (!el) return;
+
+  el.innerHTML = `
+    <table class="bin-types-table">
+      <thead>
+        <tr>
+          <th>Match</th>
+          <th>Label</th>
+          <th>Colour</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="bin-types-tbody">
+        ${_binTypes.map(bt => buildBinTypeRow(bt)).join('')}
+      </tbody>
+    </table>
+    <div id="bin-type-add-row"></div>
+    <button class="btn btn-secondary btn-sm" id="add-bin-type-btn" onclick="showAddBinTypeForm()" style="margin-top:var(--space-sm)">+ Add bin type</button>`;
+}
+
+function buildBinTypeRow(bt) {
+  return `
+    <tr id="bin-type-row-${bt.id}">
+      <td><code>${escHtml(bt.summary_match)}</code></td>
+      <td>${escHtml(bt.label)}</td>
+      <td>
+        <span class="bin-type-colour-swatch">
+          <span class="bin-type-colour-dot" style="background:${escAttr(bt.colour)}"></span>
+          ${escHtml(bt.colour)}
+        </span>
+      </td>
+      <td style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-secondary btn-sm" onclick="editBinTypeRow(${bt.id})">Edit</button>
+        <button class="btn btn-danger btn-sm" id="bt-del-btn-${bt.id}" onclick="confirmDeleteBinType(${bt.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+function editBinTypeRow(id) {
+  const bt = _binTypes.find(b => b.id === id);
+  if (!bt) return;
+  const row = document.getElementById(`bin-type-row-${id}`);
+  if (!row) return;
+  row.innerHTML = `
+    <td><input id="bt-match-${id}" value="${escAttr(bt.summary_match)}" style="min-width:80px"></td>
+    <td><input id="bt-label-${id}" value="${escAttr(bt.label)}" style="min-width:80px"></td>
+    <td><input id="bt-colour-${id}" type="color" value="${escAttr(bt.colour)}" style="width:60px"></td>
+    <td style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-primary btn-sm" onclick="saveBinTypeEdit(${id})">Save</button>
+      <button class="btn btn-secondary btn-sm" onclick="renderBinTypes()">Cancel</button>
+    </td>`;
+}
+
+async function saveBinTypeEdit(id) {
+  const match = document.getElementById(`bt-match-${id}`)?.value.trim();
+  const label = document.getElementById(`bt-label-${id}`)?.value.trim();
+  const colour = document.getElementById(`bt-colour-${id}`)?.value;
+  if (!match || !label || !colour) { showToast('All fields are required', 'error'); return; }
+  try {
+    await api('PUT', `/api/bin-types/${id}`, { summary_match: match, label, colour });
+    showToast('Bin type updated');
+    await renderBinTypes();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function confirmDeleteBinType(id) {
+  const btn = document.getElementById(`bt-del-btn-${id}`);
+  if (!btn) return;
+  btn.outerHTML = `
+    <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--danger)">
+      Delete?
+      <button class="btn btn-danger btn-sm" onclick="doDeleteBinType(${id})">Yes</button>
+      <button class="btn btn-secondary btn-sm" onclick="renderBinTypes()">No</button>
+    </span>`;
+}
+
+async function doDeleteBinType(id) {
+  try {
+    await api('DELETE', `/api/bin-types/${id}`);
+    showToast('Bin type deleted');
+    await renderBinTypes();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function showAddBinTypeForm() {
+  const btn = document.getElementById('add-bin-type-btn');
+  if (btn) btn.style.display = 'none';
+  document.getElementById('bin-type-add-row').innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-md);margin-top:var(--space-sm)">
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:var(--space-sm);align-items:end;margin-bottom:var(--space-sm)">
+        <div class="form-group" style="margin-bottom:0">
+          <label>Match text</label>
+          <input id="new-bt-match" placeholder="e.g. Grey">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>Label</label>
+          <input id="new-bt-label" placeholder="e.g. General Waste">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>Colour</label>
+          <input id="new-bt-colour" type="color" value="#6b7280" style="width:60px">
+        </div>
+      </div>
+      <div id="new-bt-error" class="form-error" style="margin-bottom:var(--space-sm)"></div>
+      <div style="display:flex;gap:var(--space-sm)">
+        <button class="btn btn-primary btn-sm" onclick="saveNewBinType()">Add</button>
+        <button class="btn btn-secondary btn-sm" onclick="cancelAddBinType()">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function cancelAddBinType() {
+  document.getElementById('bin-type-add-row').innerHTML = '';
+  const btn = document.getElementById('add-bin-type-btn');
+  if (btn) btn.style.display = '';
+}
+
+async function saveNewBinType() {
+  const match = document.getElementById('new-bt-match')?.value.trim();
+  const label = document.getElementById('new-bt-label')?.value.trim();
+  const colour = document.getElementById('new-bt-colour')?.value;
+  const errorEl = document.getElementById('new-bt-error');
+  if (!match || !label || !colour) { errorEl.textContent = 'All fields are required'; return; }
+  errorEl.textContent = '';
+  try {
+    await api('POST', '/api/bin-types', { summary_match: match, label, colour });
+    showToast('Bin type added');
+    await renderBinTypes();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+// ── XSS helpers ────────────────────────────────────────────────
 function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function escAttr(str) {
-  return String(str).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
