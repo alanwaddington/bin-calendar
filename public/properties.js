@@ -354,7 +354,6 @@ async function saveIcloudReconnect(id) {
 
 // ── Add Property accordion ─────────────────────────────────────
 function buildAddPropertyAccordion() {
-  const hasLookup = CONFIG.addressLookupConfigured;
   const hasGoogle = CONFIG.googleConfigured;
   return `
     <div class="accordion" id="acc-add-prop">
@@ -370,15 +369,6 @@ function buildAddPropertyAccordion() {
         </svg>
       </div>
       <div class="accordion-body" id="acc-add-prop-body">
-        ${hasLookup ? `
-        <div class="form-group">
-          <label>Find address by postcode</label>
-          <div style="display:flex;gap:8px">
-            <input id="add-postcode" placeholder="e.g. KA1 1AB" style="flex:1">
-            <button class="btn btn-secondary btn-sm" type="button" onclick="addPropLookup()">Search</button>
-          </div>
-          <div id="add-address-results" style="margin-top:6px;font-size:12px;color:var(--text-3)"></div>
-        </div>` : ''}
         <div class="form-group">
           <label>Label</label>
           <input id="add-label" placeholder="e.g. Home">
@@ -386,6 +376,7 @@ function buildAddPropertyAccordion() {
         <div class="form-group">
           <label>UPRN</label>
           <input id="add-uprn" placeholder="e.g. 127053058">
+          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Find your UPRN on your council&rsquo;s website or council tax letter.</p>
         </div>
         <div class="form-group">
           <label>Calendar type</label>
@@ -399,32 +390,6 @@ function buildAddPropertyAccordion() {
         <div id="add-form-error" class="form-error"></div>
       </div>
     </div>`;
-}
-
-async function addPropLookup() {
-  const postcode = document.getElementById('add-postcode')?.value.trim();
-  const el = document.getElementById('add-address-results');
-  if (!postcode) { el.textContent = 'Enter a postcode first'; return; }
-  el.textContent = 'Searching\u2026';
-  try {
-    const suggestions = await api('GET', `/api/uprn/lookup?postcode=${encodeURIComponent(postcode)}`);
-    if (suggestions.length === 0) { el.textContent = 'No addresses found for that postcode'; return; }
-    el.innerHTML = `<select id="add-address-select" style="width:100%;margin-top:4px">
-      <option value="">Select address\u2026</option>
-      ${suggestions.map(s => `<option value="${escAttr(s.id)}">${escHtml(s.address)}</option>`).join('')}
-    </select>`;
-    document.getElementById('add-address-select').addEventListener('change', async function () {
-      if (!this.value) return;
-      try {
-        const detail = await api('GET', `/api/uprn/detail?id=${encodeURIComponent(this.value)}`);
-        if (detail.uprn) document.getElementById('add-uprn').value = detail.uprn;
-      } catch (err) {
-        el.textContent = `Could not retrieve UPRN: ${err.message}`;
-      }
-    });
-  } catch {
-    el.textContent = 'Address lookup unavailable \u2014 enter your UPRN manually';
-  }
 }
 
 function renderAddCalendarFields() {
