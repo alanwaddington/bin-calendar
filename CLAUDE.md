@@ -58,7 +58,7 @@ Follow the `/analyse` → `/design` → `/develop` → `/pr-reviewer` → `/merg
 
 ## Frontend Rules
 
-**Any task that touches HTML templates, CSS, JavaScript interactions, layouts, or any visual component requires the `/frontend-design` skill. This is mandatory — do not write frontend code without invoking it first.**
+**Any task that touches HTML templates, CSS, JavaScript interactions, layouts, or any visual component requires the `/product-designer` skill. This is mandatory — do not write frontend code without invoking it first.**
 
 - Frontend is vanilla JS only — no frameworks, no build step
 - Files: `public/style.css`, `public/index.html`, `public/app.js`, `public/dashboard.js`, `public/properties.js`, `public/logs.js`

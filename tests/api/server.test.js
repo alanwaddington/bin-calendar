@@ -4,7 +4,6 @@ jest.mock('../../src/db');
 jest.mock('../../src/sync');
 jest.mock('../../src/google');
 jest.mock('../../src/icloud');
-jest.mock('../../src/uprn');
 jest.mock('../../src/scheduler');
 jest.mock('../../src/crypto');
 jest.mock('../../src/credential-check');
@@ -13,7 +12,6 @@ const { getDb } = require('../../src/db');
 const { runSync } = require('../../src/sync');
 const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require('../../src/google');
 const { fetchCalendars } = require('../../src/icloud');
-const { lookupPostcode, getAddressDetail } = require('../../src/uprn');
 const { getNextSyncDate } = require('../../src/scheduler');
 const { encryptJson } = require('../../src/crypto');
 const { checkSingleCredential } = require('../../src/credential-check');
@@ -133,7 +131,7 @@ describe('server API', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('googleConfigured');
-    expect(res.body).toHaveProperty('addressLookupConfigured');
+    expect(res.body).not.toHaveProperty('addressLookupConfigured');
   });
 
   test('PUT /api/properties/:id with valid body returns ok', async () => {
@@ -349,75 +347,6 @@ describe('server API', () => {
     expect(res.status).toBe(500);
   });
 
-  test('GET /api/uprn/lookup returns 503 when not configured', async () => {
-    delete process.env.GETADDRESS_API_KEY;
-
-    const res = await request(app).get('/api/uprn/lookup?postcode=KA1');
-
-    expect(res.status).toBe(503);
-  });
-
-  test('GET /api/uprn/lookup returns 400 without postcode', async () => {
-    process.env.GETADDRESS_API_KEY = 'test-key';
-
-    const res = await request(app).get('/api/uprn/lookup');
-
-    expect(res.status).toBe(400);
-  });
-
-  test('GET /api/uprn/lookup returns suggestions', async () => {
-    process.env.GETADDRESS_API_KEY = 'test-key';
-    lookupPostcode.mockResolvedValue([{ address: '1 Main St', id: '/addr/1' }]);
-
-    const res = await request(app).get('/api/uprn/lookup?postcode=KA1');
-
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-  });
-
-  test('GET /api/uprn/lookup returns 400 on error', async () => {
-    process.env.GETADDRESS_API_KEY = 'test-key';
-    lookupPostcode.mockRejectedValue(new Error('Timeout'));
-
-    const res = await request(app).get('/api/uprn/lookup?postcode=KA1');
-
-    expect(res.status).toBe(400);
-  });
-
-  test('GET /api/uprn/detail returns 503 when not configured', async () => {
-    delete process.env.GETADDRESS_API_KEY;
-
-    const res = await request(app).get('/api/uprn/detail?id=/addr/1');
-
-    expect(res.status).toBe(503);
-  });
-
-  test('GET /api/uprn/detail returns 400 without id', async () => {
-    process.env.GETADDRESS_API_KEY = 'test-key';
-
-    const res = await request(app).get('/api/uprn/detail');
-
-    expect(res.status).toBe(400);
-  });
-
-  test('GET /api/uprn/detail returns detail', async () => {
-    process.env.GETADDRESS_API_KEY = 'test-key';
-    getAddressDetail.mockResolvedValue({ uprn: '12345', address: '1 Main St' });
-
-    const res = await request(app).get('/api/uprn/detail?id=/addr/1');
-
-    expect(res.status).toBe(200);
-    expect(res.body.uprn).toBe('12345');
-  });
-
-  test('GET /api/uprn/detail returns 400 on error', async () => {
-    process.env.GETADDRESS_API_KEY = 'test-key';
-    getAddressDetail.mockRejectedValue(new Error('Timeout'));
-
-    const res = await request(app).get('/api/uprn/detail?id=/addr/1');
-
-    expect(res.status).toBe(400);
-  });
 
   test('GET /api/properties returns credential_status in response', async () => {
     mockPrepare.all.mockReturnValue([

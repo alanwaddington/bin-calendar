@@ -13,7 +13,6 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3000/auth/google/callback}
-      - GETADDRESS_API_KEY=${GETADDRESS_API_KEY:-}
       - PORT=${PORT:-3000}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-3000}/health"]
