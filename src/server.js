@@ -7,7 +7,6 @@ const { startScheduler, getNextSyncDate } = require('./scheduler');
 const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require('./google');
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
-const { lookupPostcode, getAddressDetail } = require('./uprn');
 const { checkSingleCredential } = require('./credential-check');
 
 const app = express();
@@ -29,7 +28,6 @@ app.get('/health', (req, res) => {
 app.get('/api/config', (req, res) => {
   res.json({
     googleConfigured: isGoogleConfigured(),
-    addressLookupConfigured: !!process.env.GETADDRESS_API_KEY,
   });
 });
 
@@ -267,33 +265,6 @@ app.delete('/api/bin-types/:id', (req, res) => {
   const result = getDb().prepare('DELETE FROM bin_types WHERE id = ?').run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
   res.status(204).send();
-});
-
-// ── UPRN Lookup ────────────────────────────────────────────────────────────
-app.get('/api/uprn/lookup', async (req, res) => {
-  if (!process.env.GETADDRESS_API_KEY) {
-    return res.status(503).json({ error: 'Address lookup not configured' });
-  }
-  if (!req.query.postcode) return res.status(400).json({ error: 'postcode is required' });
-  try {
-    const suggestions = await lookupPostcode(req.query.postcode);
-    res.json(suggestions);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-app.get('/api/uprn/detail', async (req, res) => {
-  if (!process.env.GETADDRESS_API_KEY) {
-    return res.status(503).json({ error: 'Address lookup not configured' });
-  }
-  if (!req.query.id) return res.status(400).json({ error: 'id is required' });
-  try {
-    const detail = await getAddressDetail(req.query.id);
-    res.json(detail);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
