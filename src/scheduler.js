@@ -1,12 +1,26 @@
 const cron = require('node-cron');
+const { CronExpressionParser } = require('cron-parser');
 const { runSync } = require('./sync');
 const { checkAllCredentials } = require('./credential-check');
+const { getDb } = require('./db');
+
+const DEFAULT_CRON = '0 0 1 * *';
 
 let syncTask;
 let credentialTask;
+let currentCronExpression = DEFAULT_CRON;
 
-function startScheduler() {
-  syncTask = cron.schedule('0 0 1 * *', async () => {
+function loadCronExpression() {
+  try {
+    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get('sync_cron');
+    return (row && row.value) ? row.value : DEFAULT_CRON;
+  } catch {
+    return DEFAULT_CRON;
+  }
+}
+
+function scheduleSyncTask(expression) {
+  return cron.schedule(expression, async () => {
     console.log('Scheduled sync starting...');
     try {
       const result = await runSync();
@@ -15,6 +29,11 @@ function startScheduler() {
       console.error('Scheduled sync error:', err.message);
     }
   });
+}
+
+function startScheduler() {
+  currentCronExpression = loadCronExpression();
+  syncTask = scheduleSyncTask(currentCronExpression);
 
   credentialTask = cron.schedule('0 0 * * 0', async () => {
     console.log('Weekly credential check starting...');
@@ -26,13 +45,18 @@ function startScheduler() {
     }
   });
 
-  console.log('Scheduler started — next sync on 1st of next month at 00:00');
+  console.log(`Scheduler started — next sync: ${getNextSyncDate()}`);
+}
+
+function restartSyncSchedule(expression) {
+  if (syncTask) syncTask.stop();
+  currentCronExpression = expression;
+  syncTask = scheduleSyncTask(expression);
 }
 
 function getNextSyncDate() {
-  const now = new Date();
-  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0));
-  return next.toISOString();
+  const interval = CronExpressionParser.parse(currentCronExpression);
+  return interval.next().toISOString();
 }
 
 function stopScheduler() {
@@ -40,4 +64,4 @@ function stopScheduler() {
   if (credentialTask) credentialTask.stop();
 }
 
-module.exports = { startScheduler, getNextSyncDate, stopScheduler };
+module.exports = { startScheduler, getNextSyncDate, stopScheduler, restartSyncSchedule };
