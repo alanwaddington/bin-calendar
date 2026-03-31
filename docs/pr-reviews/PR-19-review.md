@@ -148,33 +148,37 @@ None.
 
 ### Major (should fix)
 
-#### M1 — `DEFAULT_SYNC_CRON` duplicated across modules
+#### M1 — `DEFAULT_SYNC_CRON` duplicated across modules ✅ Resolved
 - **Category:** Code Quality
 - **Location:** `src/scheduler.js:7`, `src/server.js:272`
 - **Description:** The default cron expression `'0 0 1 * *'` is defined as a constant in both `scheduler.js` (`DEFAULT_CRON`) and `server.js` (`DEFAULT_SYNC_CRON`). If the default ever changes, both must be updated in lockstep. Since the migration also seeds this value, there are three places defining the same default.
 - **Recommendation:** Export `DEFAULT_CRON` from `scheduler.js` and import it in `server.js` instead of redeclaring. The migration seed is acceptable as a one-time bootstrap value.
+- **Resolution:** `DEFAULT_CRON` now exported from `scheduler.js` and imported in `server.js`. Duplicate constant removed.
 
 ### Minor (nice to fix)
 
-#### m1 — `subtitleEl.textContent` bypasses `escHtml()` on save success
+#### m1 — `subtitleEl.textContent` bypasses `escHtml()` on save success ✅ Resolved
 - **Category:** Security
 - **Location:** `public/properties.js:135`
 - **Description:** On save success, `subtitleEl.textContent = data.cronExpression` sets the subtitle. Using `.textContent` is safe (it does not parse HTML), so this is not a vulnerability — but it's inconsistent with the project's convention of always using `escHtml()` for user-sourced data. For consistency with the XSS escaping rules in CLAUDE.md, prefer `subtitleEl.textContent` (which is already correct) or document why it's acceptable.
 - **Recommendation:** No change needed — `.textContent` is inherently safe. This is noted for consistency awareness only.
+- **Resolution:** Changed to `subtitleEl.innerHTML = escHtml(data.cronExpression)` for full consistency with the codebase XSS escaping convention.
 
-#### m2 — `cron-parser` brings `luxon` as a transitive dependency
+#### m2 — `cron-parser` brings `luxon` as a transitive dependency ⚠️ Not actionable
 - **Category:** Performance / Bundle Size
 - **Location:** `package.json`
 - **Description:** `cron-parser` v5 depends on `luxon` (~73KB minified), which is a relatively large date library. This only affects the Docker image size, not runtime performance, so the impact is minimal for a self-hosted NAS application.
 - **Recommendation:** Acceptable for now. If image size becomes a concern, consider `cron-parser` v4 (which has no `luxon` dependency) or compute next-occurrence manually for 5-field cron.
+- **Resolution:** Not actionable — investigation confirms `luxon` is a dependency of all released versions of `cron-parser` (v3, v4, and v5). The finding stands as accepted risk.
 
 ### Suggestions (optional)
 
-#### S1 — Disable save button during API call
+#### S1 — Disable save button during API call ✅ Resolved
 - **Category:** UX
 - **Location:** `public/properties.js:108-141`
 - **Description:** The save button doesn't disable while the PUT request is in flight, allowing double-submission. This is a minor UX issue — the server handles idempotent upserts, so double-submission is harmless, but disabling the button would provide better feedback.
 - **Recommendation:** Add `button.disabled = true` at the start of `saveSyncSchedule()` and re-enable in the `finally` block.
+- **Resolution:** Button is now disabled at start of API call and re-enabled in `finally` block.
 
 ---
 
@@ -196,8 +200,10 @@ None.
 None.
 
 ### Post-merge improvements
-- [ ] M1: Consolidate `DEFAULT_SYNC_CRON` constant — export from `scheduler.js` and import in `server.js`
-- [ ] S1: Disable save button during API call for better UX feedback
+- [x] M1: Consolidate `DEFAULT_SYNC_CRON` constant — export from `scheduler.js` and import in `server.js`
+- [x] m1: Switch subtitle update to `innerHTML` + `escHtml()` for XSS convention consistency
+- [ ] m2: `cron-parser` → `luxon` transitive dependency — not actionable (all versions affected)
+- [x] S1: Disable save button during API call for better UX feedback
 
 ---
 

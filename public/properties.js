@@ -110,6 +110,7 @@ async function saveSyncSchedule() {
   const errEl = document.getElementById('sync-schedule-error');
   const nextEl = document.getElementById('sync-schedule-next');
   const subtitleEl = document.getElementById('sync-schedule-subtitle');
+  const btn = document.querySelector('#acc-sync-schedule .btn-primary');
 
   if (!input || !errEl) return;
 
@@ -128,16 +129,19 @@ async function saveSyncSchedule() {
     return;
   }
 
+  if (btn) btn.disabled = true;
   try {
     const data = await api('PUT', '/api/settings/sync-schedule', { cronExpression });
     const nextSync = data.nextSync ? new Date(data.nextSync).toLocaleString() : '';
     if (nextEl) nextEl.innerHTML = `Next sync: <strong>${escHtml(nextSync)}</strong>`;
-    if (subtitleEl) subtitleEl.textContent = data.cronExpression;
+    if (subtitleEl) subtitleEl.innerHTML = escHtml(data.cronExpression);
     clearSyncScheduleError();
     showToast('Sync schedule saved');
   } catch (err) {
     errEl.textContent = err.message || 'Failed to save sync schedule.';
     errEl.style.display = 'block';
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

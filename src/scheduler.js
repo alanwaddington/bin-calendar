@@ -64,4 +64,4 @@ function stopScheduler() {
   if (credentialTask) credentialTask.stop();
 }
 
-module.exports = { startScheduler, getNextSyncDate, stopScheduler, restartSyncSchedule };
+module.exports = { startScheduler, getNextSyncDate, stopScheduler, restartSyncSchedule, DEFAULT_CRON };

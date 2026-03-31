@@ -4,7 +4,7 @@ const path = require('path');
 const { initDb, getDb } = require('./db');
 const { runSync } = require('./sync');
 const cron = require('node-cron');
-const { startScheduler, getNextSyncDate, restartSyncSchedule } = require('./scheduler');
+const { startScheduler, getNextSyncDate, restartSyncSchedule, DEFAULT_CRON } = require('./scheduler');
 const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require('./google');
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
@@ -269,12 +269,10 @@ app.delete('/api/bin-types/:id', (req, res) => {
 });
 
 // ── Settings ───────────────────────────────────────────────────────────────
-const DEFAULT_SYNC_CRON = '0 0 1 * *';
-
 app.get('/api/settings/sync-schedule', (req, res) => {
   try {
     const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get('sync_cron');
-    const cronExpression = (row && row.value) ? row.value : DEFAULT_SYNC_CRON;
+    const cronExpression = (row && row.value) ? row.value : DEFAULT_CRON;
     res.json({ cronExpression, nextSync: getNextSyncDate() });
   } catch (err) {
     res.status(500).json({ error: err.message });
