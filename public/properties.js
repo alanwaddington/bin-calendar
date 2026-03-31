@@ -9,6 +9,10 @@ async function loadSettings() {
   const el = document.getElementById('view-settings');
   el.innerHTML = `
     <div class="settings-section">
+      <div class="section-label">SYNC SCHEDULE</div>
+      <div id="sync-schedule-section"></div>
+    </div>
+    <div class="settings-section">
       <div class="section-label">PROPERTIES</div>
       <div id="property-accordions"></div>
     </div>
@@ -18,6 +22,7 @@ async function loadSettings() {
     </div>`;
 
   await Promise.all([
+    renderSyncSchedule(),
     renderPropertyAccordions(),
     renderBinTypes(),
   ]);
@@ -26,6 +31,113 @@ async function loadSettings() {
     const id = window._settingsTargetPropertyId;
     window._settingsTargetPropertyId = null;
     toggleAccordion(`acc-prop-${id}`);
+  }
+}
+
+// ── Sync Schedule ──────────────────────────────────────────────
+async function renderSyncSchedule() {
+  const el = document.getElementById('sync-schedule-section');
+  if (!el) return;
+
+  let cronExpression = '0 0 1 * *';
+  let nextSync = '';
+
+  try {
+    const data = await api('GET', '/api/settings/sync-schedule');
+    cronExpression = data.cronExpression;
+    nextSync = data.nextSync ? new Date(data.nextSync).toLocaleString() : '';
+  } catch (err) {
+    el.innerHTML = `<p class="form-error">Failed to load sync schedule: ${escHtml(err.message)}</p>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="accordion open" id="acc-sync-schedule">
+      <div class="accordion-header" onclick="toggleSyncScheduleAccordion()">
+        <div class="accordion-header-left">
+          <span class="accordion-title">Sync Schedule</span>
+          <span class="accordion-subtitle" id="sync-schedule-subtitle">${escHtml(cronExpression)}</span>
+        </div>
+        <svg class="accordion-chevron" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+        </svg>
+      </div>
+      <div class="accordion-body open" id="sync-schedule-body">
+        <div class="form-group">
+          <label for="cron-expression-input">Cron expression</label>
+          <input type="text" id="cron-expression-input" value="${escAttr(cronExpression)}"
+            placeholder="e.g. 0 0 1 * *" autocomplete="off" spellcheck="false"
+            oninput="clearSyncScheduleError()">
+          <div class="form-error" id="sync-schedule-error" style="display:none"></div>
+          <div class="sync-schedule-examples">
+            <span><code>0 0 1 * *</code> — 1st of every month</span>
+            <span><code>0 0 * * 0</code> — every Sunday</span>
+            <span><code>0 0 1,15 * *</code> — 1st and 15th of month</span>
+            <span><code>0 0 * * 1</code> — every Monday</span>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-primary btn-sm" onclick="saveSyncSchedule()">Save schedule</button>
+        </div>
+        <p class="sync-schedule-next" id="sync-schedule-next">
+          Next sync: <strong>${escHtml(nextSync)}</strong>
+        </p>
+      </div>
+    </div>`;
+}
+
+function toggleSyncScheduleAccordion() {
+  const acc = document.getElementById('acc-sync-schedule');
+  const body = document.getElementById('sync-schedule-body');
+  if (!acc || !body) return;
+  const isOpen = acc.classList.contains('open');
+  if (isOpen) {
+    acc.classList.remove('open');
+    body.classList.remove('open');
+  } else {
+    acc.classList.add('open');
+    body.classList.add('open');
+  }
+}
+
+function clearSyncScheduleError() {
+  const errEl = document.getElementById('sync-schedule-error');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+}
+
+async function saveSyncSchedule() {
+  const input = document.getElementById('cron-expression-input');
+  const errEl = document.getElementById('sync-schedule-error');
+  const nextEl = document.getElementById('sync-schedule-next');
+  const subtitleEl = document.getElementById('sync-schedule-subtitle');
+
+  if (!input || !errEl) return;
+
+  const cronExpression = input.value.trim();
+
+  if (!cronExpression) {
+    errEl.textContent = 'Please enter a cron expression.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  // Basic client-side structural validation: 5 space-separated fields
+  if (!/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(cronExpression)) {
+    errEl.textContent = 'A cron expression must have exactly 5 fields (e.g. 0 0 1 * *).';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  try {
+    const data = await api('PUT', '/api/settings/sync-schedule', { cronExpression });
+    const nextSync = data.nextSync ? new Date(data.nextSync).toLocaleString() : '';
+    if (nextEl) nextEl.innerHTML = `Next sync: <strong>${escHtml(nextSync)}</strong>`;
+    if (subtitleEl) subtitleEl.textContent = data.cronExpression;
+    clearSyncScheduleError();
+    showToast('Sync schedule saved');
+  } catch (err) {
+    errEl.textContent = err.message || 'Failed to save sync schedule.';
+    errEl.style.display = 'block';
   }
 }
 
