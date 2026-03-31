@@ -625,4 +625,127 @@ describe('server API', () => {
 
     expect(res.status).toBe(404);
   });
+
+  // --- GET /api/settings/sync-schedule ---
+
+  test('GET_syncSchedule_returns200WithCurrentExpression', async () => {
+    mockPrepare.get.mockReturnValueOnce({ value: '0 0 1 * *' });
+    getNextSyncDate.mockReturnValue('2026-05-01T00:00:00.000Z');
+
+    const res = await request(app).get('/api/settings/sync-schedule');
+
+    expect(res.status).toBe(200);
+    expect(res.body.cronExpression).toBe('0 0 1 * *');
+    expect(res.body.nextSync).toBe('2026-05-01T00:00:00.000Z');
+  });
+
+  test('GET_syncSchedule_returnsDefaultWhenNoRow', async () => {
+    mockPrepare.get.mockReturnValueOnce(undefined);
+    getNextSyncDate.mockReturnValue('2026-05-01T00:00:00.000Z');
+
+    const res = await request(app).get('/api/settings/sync-schedule');
+
+    expect(res.status).toBe(200);
+    expect(res.body.cronExpression).toBe('0 0 1 * *');
+  });
+
+  // --- PUT /api/settings/sync-schedule ---
+
+  test('PUT_syncSchedule_validExpression_returns200AndRestartsScheduler', async () => {
+    const { restartSyncSchedule } = require('../../src/scheduler');
+    getNextSyncDate.mockReturnValue('2026-06-01T00:00:00.000Z');
+
+    const res = await request(app)
+      .put('/api/settings/sync-schedule')
+      .send({ cronExpression: '0 0 * * 1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cronExpression).toBe('0 0 * * 1');
+    expect(res.body.nextSync).toBe('2026-06-01T00:00:00.000Z');
+    expect(restartSyncSchedule).toHaveBeenCalledWith('0 0 * * 1');
+    expect(mockPrepare.run).toHaveBeenCalled();
+  });
+
+  test('PUT_syncSchedule_invalidExpression_returns400', async () => {
+    const res = await request(app)
+      .put('/api/settings/sync-schedule')
+      .send({ cronExpression: 'not-a-cron' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid cron expression');
+  });
+
+  test('PUT_syncSchedule_missingCronExpression_returns400', async () => {
+    const res = await request(app)
+      .put('/api/settings/sync-schedule')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('cronExpression is required');
+  });
+
+  test('PUT_syncSchedule_serverError_returns500', async () => {
+    getDb.mockReturnValueOnce({
+      prepare: jest.fn().mockImplementation(() => { throw new Error('DB error'); }),
+    });
+
+    const res = await request(app)
+      .put('/api/settings/sync-schedule')
+      .send({ cronExpression: '0 0 1 * *' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBeDefined();
+  });
+
+  // --- Integration edge cases ---
+
+  test('health_returnsNextSyncFromScheduler', async () => {
+    getNextSyncDate.mockReturnValue('2026-07-01T00:00:00.000Z');
+
+    const res = await request(app).get('/health');
+
+    expect(res.status).toBe(200);
+    expect(res.body.nextSync).toBe('2026-07-01T00:00:00.000Z');
+  });
+
+  test('syncNow_withCustomSchedule_stillReturnsSuccess', async () => {
+    runSync.mockResolvedValue({ status: 200, overallStatus: 'success' });
+
+    const res = await request(app).post('/api/sync');
+
+    expect(res.status).toBe(200);
+    expect(res.body.overallStatus).toBe('success');
+  });
+
+  test('PUT_syncSchedule_callsRestartSyncScheduleWithNewExpression', async () => {
+    const { restartSyncSchedule } = require('../../src/scheduler');
+    getNextSyncDate.mockReturnValue('2026-05-15T00:00:00.000Z');
+
+    await request(app)
+      .put('/api/settings/sync-schedule')
+      .send({ cronExpression: '0 0 15 * *' });
+
+    expect(restartSyncSchedule).toHaveBeenCalledWith('0 0 15 * *');
+  });
+
+  test('PUT_syncSchedule_doesNotCallRestartOnInvalidExpression', async () => {
+    const { restartSyncSchedule } = require('../../src/scheduler');
+
+    await request(app)
+      .put('/api/settings/sync-schedule')
+      .send({ cronExpression: 'bad cron' });
+
+    expect(restartSyncSchedule).not.toHaveBeenCalled();
+  });
+
+  test('GET_syncSchedule_serverError_returns500', async () => {
+    getDb.mockReturnValueOnce({
+      prepare: jest.fn().mockImplementation(() => { throw new Error('DB gone'); }),
+    });
+
+    const res = await request(app).get('/api/settings/sync-schedule');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBeDefined();
+  });
 });
