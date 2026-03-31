@@ -131,4 +131,39 @@ describe('db', () => {
       db.prepare("INSERT INTO bin_types (summary_match, label, colour) VALUES ('Grey', 'Duplicate', '#000000')").run()
     ).toThrow();
   });
+
+  test('initDb_migration004_createsSettingsTable', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
+    expect(tables).toContain('settings');
+  });
+
+  test('initDb_migration004_seedsDefaultSyncCron', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'sync_cron'").get();
+    expect(row).toBeDefined();
+    expect(row.value).toBe('0 0 1 * *');
+  });
+
+  test('initDb_migration004_settingsKeyIsPrimaryKey', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    expect(() =>
+      db.prepare("INSERT INTO settings (key, value) VALUES ('sync_cron', 'duplicate')").run()
+    ).toThrow();
+  });
+
+  test('initDb_migration004_settingsHasUpdatedAt', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const row = db.prepare("SELECT updated_at FROM settings WHERE key = 'sync_cron'").get();
+    expect(row).toBeDefined();
+    expect(row.updated_at).toBeTruthy();
+  });
 });
