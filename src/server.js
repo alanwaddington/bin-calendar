@@ -3,7 +3,8 @@ const crypto = require('crypto');
 const path = require('path');
 const { initDb, getDb } = require('./db');
 const { runSync } = require('./sync');
-const { startScheduler, getNextSyncDate } = require('./scheduler');
+const cron = require('node-cron');
+const { startScheduler, getNextSyncDate, restartSyncSchedule } = require('./scheduler');
 const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require('./google');
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
@@ -265,6 +266,34 @@ app.delete('/api/bin-types/:id', (req, res) => {
   const result = getDb().prepare('DELETE FROM bin_types WHERE id = ?').run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
   res.status(204).send();
+});
+
+// ── Settings ───────────────────────────────────────────────────────────────
+const DEFAULT_SYNC_CRON = '0 0 1 * *';
+
+app.get('/api/settings/sync-schedule', (req, res) => {
+  try {
+    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get('sync_cron');
+    const cronExpression = (row && row.value) ? row.value : DEFAULT_SYNC_CRON;
+    res.json({ cronExpression, nextSync: getNextSyncDate() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/settings/sync-schedule', (req, res) => {
+  const { cronExpression } = req.body || {};
+  if (!cronExpression) return res.status(400).json({ error: 'cronExpression is required' });
+  if (!cron.validate(cronExpression)) return res.status(400).json({ error: 'Invalid cron expression' });
+  try {
+    getDb().prepare(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    ).run('sync_cron', cronExpression);
+    restartSyncSchedule(cronExpression);
+    res.json({ cronExpression, nextSync: getNextSyncDate() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
