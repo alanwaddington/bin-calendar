@@ -7,9 +7,8 @@ A self-hosted Docker application that fetches bin collection schedules from East
 - Fetches ICS files from East Ayrshire Council by UPRN
 - Syncs to Google Calendar (OAuth2) or iCloud (CalDAV)
 - Multiple properties supported — each syncs independently
-- Automatic sync on the 1st of each month
+- Configurable sync schedule via a custom cron expression (default: 1st of each month)
 - Manual sync via the web UI
-- Address/UPRN lookup via getAddress.io (optional)
 - Sync history and per-property logs
 - Credentials encrypted at rest (AES-256-GCM)
 
@@ -19,7 +18,7 @@ A self-hosted Docker application that fetches bin collection schedules from East
 graph TD
     UI[Web UI<br/>Dashboard / Properties / Logs]
     API[Express API<br/>server.js]
-    SCHED[Scheduler<br/>node-cron — 1st of month]
+    SCHED[Scheduler<br/>node-cron — configurable cron]
     SYNC[Sync Orchestrator<br/>sync.js]
     ICS[ICS Fetcher<br/>ics.js]
     GOOGLE[Google Calendar<br/>googleapis OAuth2]
@@ -175,6 +174,13 @@ Pull requests also run the test job (no Docker build).
 | POST | `/api/properties/:id/icloud` | Save iCloud credentials |
 | POST | `/api/sync` | Trigger a manual sync |
 | GET | `/api/sync/runs` | Sync history |
+| GET | `/api/next-collection` | Next upcoming bin collection across all properties |
+| GET | `/api/bin-types` | List bin type label/colour mappings |
+| POST | `/api/bin-types` | Create a bin type mapping |
+| PUT | `/api/bin-types/:id` | Update a bin type mapping |
+| DELETE | `/api/bin-types/:id` | Delete a bin type mapping |
+| GET | `/api/settings/sync-schedule` | Get current sync cron expression and next run date |
+| PUT | `/api/settings/sync-schedule` | Update sync cron expression |
 
 ## Data
 

@@ -123,7 +123,7 @@ Power-user monitoring interface. Inspired by infrastructure dashboards (Grafana,
 |  SYSTEM STATUS                                                         |
 |  ┌──────────────────────────────────────────────────────────────────┐  |
 |  │ Sync       HEALTHY   │ Last run  2h ago  │ Next run  4 days      │  |
-|  │ Properties 2/2 OK    │ Duration  1.2s    │ Schedule  1st/month   │  |
+|  │ Properties 2/2 OK    │ Duration  1.2s    │ Schedule  configurable │  |
 |  └──────────────────────────────────────────────────────────────────┘  |
 |                                                                        |
 |  PROPERTIES                        RECENT RUNS                        |
