@@ -34,6 +34,93 @@ async function loadSettings() {
   }
 }
 
+// ── Schedule builder helpers ───────────────────────────────────
+function buildCronExpression(frequency, param, hour) {
+  const h = parseInt(hour, 10);
+  if (frequency === 'weekly')      return `0 ${h} * * ${param}`;
+  if (frequency === 'fortnightly') return `0 ${h} ${param} * *`;
+  if (frequency === 'quarterly')   return `0 ${h} ${param} */3 *`;
+  return `0 ${h} ${param} * *`; // monthly
+}
+
+function parseCronToSelection(cronExpr) {
+  try {
+    const fields = (cronExpr || '').trim().split(/\s+/);
+    if (fields.length !== 5) throw new Error('invalid');
+    const [, hour, dom, month, dow] = fields;
+    const h = parseInt(hour, 10);
+    if (dow !== '*')       return { frequency: 'weekly',      param: dow,               hour: h };
+    if (dom.includes(',')) return { frequency: 'fortnightly', param: dom,               hour: h };
+    if (month === '*/3')   return { frequency: 'quarterly',   param: parseInt(dom, 10), hour: h };
+                           return { frequency: 'monthly',     param: parseInt(dom, 10), hour: h };
+  } catch {
+    return { frequency: 'monthly', param: 1, hour: 0 };
+  }
+}
+
+function scheduleDescription(cronExpr) {
+  const sel = parseCronToSelection(cronExpr);
+  const timeLabel = { 0: 'midnight', 6: '6am', 12: 'noon', 18: '6pm' }[sel.hour] || `${sel.hour}:00`;
+  if (sel.frequency === 'weekly') {
+    const dayLabel = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][parseInt(sel.param, 10)];
+    return `Every ${dayLabel} at ${timeLabel}`;
+  }
+  const n = parseInt(sel.param, 10);
+  const suffix = n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
+  if (sel.frequency === 'fortnightly') {
+    const pairLabel = sel.param === '1,15' ? '1st & 15th' : '8th & 22nd';
+    return `Every 2 weeks \u00b7 ${pairLabel} at ${timeLabel}`;
+  }
+  if (sel.frequency === 'quarterly') return `Every 3 months \u00b7 ${n}${suffix} at ${timeLabel}`;
+  return `Every month \u00b7 ${n}${suffix} at ${timeLabel}`;
+}
+
+function buildScheduleSentenceHTML(sel) {
+  const { frequency, param, hour } = sel;
+
+  const freqOptions = [
+    ['weekly',      'every week'],
+    ['fortnightly', 'every 2 weeks'],
+    ['monthly',     'every month'],
+    ['quarterly',   'every 3 months'],
+  ].map(([v, l]) => `<option value="${v}"${v === frequency ? ' selected' : ''}>${l}</option>`).join('');
+
+  let midConnector, midOptions;
+  if (frequency === 'weekly') {
+    midConnector = 'on';
+    midOptions = [
+      ['1','Monday'],['2','Tuesday'],['3','Wednesday'],['4','Thursday'],
+      ['5','Friday'],['6','Saturday'],['0','Sunday'],
+    ].map(([v, l]) => `<option value="${v}"${String(v) === String(param) ? ' selected' : ''}>${l}</option>`).join('');
+  } else if (frequency === 'fortnightly') {
+    midConnector = 'on the';
+    midOptions = [
+      ['1,15', '1st &amp; 15th'],
+      ['8,22', '8th &amp; 22nd'],
+    ].map(([v, l]) => `<option value="${v}"${v === param ? ' selected' : ''}>${l}</option>`).join('');
+  } else {
+    midConnector = 'on the';
+    midOptions = Array.from({ length: 28 }, (_, i) => {
+      const n = i + 1;
+      const s = n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
+      return `<option value="${n}"${n === parseInt(param, 10) ? ' selected' : ''}>${n}${s}</option>`;
+    }).join('');
+  }
+
+  const timeOptions = [
+    ['0','midnight'],['6','6am'],['12','noon'],['18','6pm'],
+  ].map(([v, l]) => `<option value="${v}"${parseInt(v, 10) === parseInt(hour, 10) ? ' selected' : ''}>${l}</option>`).join('');
+
+  return `<div class="schedule-sentence">
+      <span class="schedule-connector">Sync</span>
+      <select class="schedule-token" id="sch-frequency" onchange="onFrequencyChange(this)">${freqOptions}</select>
+      <span class="schedule-connector" id="sch-mid-connector">${midConnector}</span>
+      <select class="schedule-token" id="sch-param">${midOptions}</select>
+      <span class="schedule-connector">at</span>
+      <select class="schedule-token" id="sch-time">${timeOptions}</select>
+    </div>`;
+}
+
 // ── Sync Schedule ──────────────────────────────────────────────
 async function renderSyncSchedule() {
   const el = document.getElementById('sync-schedule-section');
@@ -51,31 +138,22 @@ async function renderSyncSchedule() {
     return;
   }
 
+  const sel = parseCronToSelection(cronExpression);
+  const subtitle = scheduleDescription(cronExpression);
+
   el.innerHTML = `
     <div class="accordion open" id="acc-sync-schedule">
       <div class="accordion-header" onclick="toggleSyncScheduleAccordion()">
         <div class="accordion-header-left">
           <span class="accordion-title">Sync Schedule</span>
-          <span class="accordion-subtitle" id="sync-schedule-subtitle">${escHtml(cronExpression)}</span>
+          <span class="accordion-subtitle" id="sync-schedule-subtitle">${escHtml(subtitle)}</span>
         </div>
         <svg class="accordion-chevron" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
         </svg>
       </div>
       <div class="accordion-body open" id="sync-schedule-body">
-        <div class="form-group">
-          <label for="cron-expression-input">Cron expression</label>
-          <input type="text" id="cron-expression-input" value="${escAttr(cronExpression)}"
-            placeholder="e.g. 0 0 1 * *" autocomplete="off" spellcheck="false"
-            oninput="clearSyncScheduleError()">
-          <div class="form-error" id="sync-schedule-error" style="display:none"></div>
-          <div class="sync-schedule-examples">
-            <span><code>0 0 1 * *</code> — 1st of every month</span>
-            <span><code>0 0 * * 0</code> — every Sunday</span>
-            <span><code>0 0 1,15 * *</code> — 1st and 15th of month</span>
-            <span><code>0 0 * * 1</code> — every Monday</span>
-          </div>
-        </div>
+        ${buildScheduleSentenceHTML(sel)}
         <div class="form-actions">
           <button class="btn btn-primary btn-sm" onclick="saveSyncSchedule()">Save schedule</button>
         </div>
@@ -100,46 +178,56 @@ function toggleSyncScheduleAccordion() {
   }
 }
 
-function clearSyncScheduleError() {
-  const errEl = document.getElementById('sync-schedule-error');
-  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+function onFrequencyChange(selectEl) {
+  const frequency = selectEl.value;
+  const connectorEl = document.getElementById('sch-mid-connector');
+  const paramEl = document.getElementById('sch-param');
+  if (!connectorEl || !paramEl) return;
+
+  let connector, optionsHTML;
+  if (frequency === 'weekly') {
+    connector = 'on';
+    optionsHTML = [
+      ['1','Monday'],['2','Tuesday'],['3','Wednesday'],['4','Thursday'],
+      ['5','Friday'],['6','Saturday'],['0','Sunday'],
+    ].map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  } else if (frequency === 'fortnightly') {
+    connector = 'on the';
+    optionsHTML = `<option value="1,15">1st &amp; 15th</option><option value="8,22">8th &amp; 22nd</option>`;
+  } else {
+    connector = 'on the';
+    optionsHTML = Array.from({ length: 28 }, (_, i) => {
+      const n = i + 1;
+      const s = n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
+      return `<option value="${n}"${n === 1 ? ' selected' : ''}>${n}${s}</option>`;
+    }).join('');
+  }
+
+  connectorEl.textContent = connector;
+  paramEl.innerHTML = optionsHTML;
 }
 
 async function saveSyncSchedule() {
-  const input = document.getElementById('cron-expression-input');
-  const errEl = document.getElementById('sync-schedule-error');
+  const freqEl = document.getElementById('sch-frequency');
+  const paramEl = document.getElementById('sch-param');
+  const timeEl = document.getElementById('sch-time');
   const nextEl = document.getElementById('sync-schedule-next');
   const subtitleEl = document.getElementById('sync-schedule-subtitle');
   const btn = document.querySelector('#acc-sync-schedule .btn-primary');
 
-  if (!input || !errEl) return;
+  if (!freqEl || !paramEl || !timeEl) return;
 
-  const cronExpression = input.value.trim();
-
-  if (!cronExpression) {
-    errEl.textContent = 'Please enter a cron expression.';
-    errEl.style.display = 'block';
-    return;
-  }
-
-  // Basic client-side structural validation: 5 space-separated fields
-  if (!/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(cronExpression)) {
-    errEl.textContent = 'A cron expression must have exactly 5 fields (e.g. 0 0 1 * *).';
-    errEl.style.display = 'block';
-    return;
-  }
+  const cronExpression = buildCronExpression(freqEl.value, paramEl.value, timeEl.value);
 
   if (btn) btn.disabled = true;
   try {
     const data = await api('PUT', '/api/settings/sync-schedule', { cronExpression });
     const nextSync = data.nextSync ? new Date(data.nextSync).toLocaleString() : '';
     if (nextEl) nextEl.innerHTML = `Next sync: <strong>${escHtml(nextSync)}</strong>`;
-    if (subtitleEl) subtitleEl.innerHTML = escHtml(data.cronExpression);
-    clearSyncScheduleError();
+    if (subtitleEl) subtitleEl.innerHTML = escHtml(scheduleDescription(data.cronExpression));
     showToast('Sync schedule saved');
   } catch (err) {
-    errEl.textContent = err.message || 'Failed to save sync schedule.';
-    errEl.style.display = 'block';
+    showToast(err.message || 'Failed to save sync schedule.', 'error');
   } finally {
     if (btn) btn.disabled = false;
   }

@@ -800,17 +800,41 @@ input[type="color"] {
 }
 
 /* ── Sync Schedule ───────────────────────────────────────────── */
-.sync-schedule-examples {
+.schedule-sentence {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 6px var(--space-md);
-  margin-top: var(--space-sm);
-  font-size: 12px;
+  gap: 6px;
+  font-size: 14px;
+  margin-bottom: var(--space-md);
+}
+
+.schedule-connector {
   color: var(--text-3);
 }
 
+.schedule-token {
+  background: var(--surface-2);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: var(--font-body);
+  transition: var(--t-fast);
+  outline: none;
+  width: auto;
+}
+
+.schedule-token:focus {
+  box-shadow: 0 0 0 3px var(--primary-glow);
+  border-color: var(--primary-bright);
+}
+
 .sync-schedule-next {
-  margin-top: var(--space-md);
+  margin-top: var(--space-sm);
   font-size: 12px;
   color: var(--text-3);
 }
