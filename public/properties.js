@@ -35,8 +35,10 @@ async function loadSettings() {
 }
 
 // ── Schedule builder helpers ───────────────────────────────────
-function buildCronExpression(frequency, param, hour) {
-  const h = parseInt(hour, 10);
+function buildCronExpression(frequency, param, localHour) {
+  // Convert local time to UTC for storage — cron runs on the server in UTC
+  const offsetHours = new Date().getTimezoneOffset() / 60; // e.g. -1 for BST
+  const h = ((parseInt(localHour, 10) + offsetHours) + 24) % 24;
   if (frequency === 'weekly')      return `0 ${h} * * ${param}`;
   if (frequency === 'fortnightly') return `0 ${h} ${param} * *`;
   if (frequency === 'quarterly')   return `0 ${h} ${param} */3 *`;
@@ -48,7 +50,9 @@ function parseCronToSelection(cronExpr) {
     const fields = (cronExpr || '').trim().split(/\s+/);
     if (fields.length !== 5) throw new Error('invalid');
     const [, hour, dom, month, dow] = fields;
-    const h = parseInt(hour, 10);
+    // Convert UTC cron hour back to local time for display
+    const offsetHours = new Date().getTimezoneOffset() / 60;
+    const h = ((parseInt(hour, 10) - offsetHours) + 24) % 24;
     if (dow !== '*')       return { frequency: 'weekly',      param: dow,               hour: h };
     if (dom.includes(',')) return { frequency: 'fortnightly', param: dom,               hour: h };
     if (month === '*/3')   return { frequency: 'quarterly',   param: parseInt(dom, 10), hour: h };
