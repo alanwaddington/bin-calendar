@@ -35,10 +35,8 @@ async function loadSettings() {
 }
 
 // ── Schedule builder helpers ───────────────────────────────────
-function buildCronExpression(frequency, param, localHour) {
-  // Convert local time to UTC for storage — cron runs on the server in UTC
-  const offsetHours = new Date().getTimezoneOffset() / 60; // e.g. -1 for BST
-  const h = ((parseInt(localHour, 10) + offsetHours) + 24) % 24;
+function buildCronExpression(frequency, param, hour) {
+  const h = parseInt(hour, 10);
   if (frequency === 'weekly')      return `0 ${h} * * ${param}`;
   if (frequency === 'fortnightly') return `0 ${h} ${param} * *`;
   if (frequency === 'quarterly')   return `0 ${h} ${param} */3 *`;
@@ -50,9 +48,7 @@ function parseCronToSelection(cronExpr) {
     const fields = (cronExpr || '').trim().split(/\s+/);
     if (fields.length !== 5) throw new Error('invalid');
     const [, hour, dom, month, dow] = fields;
-    // Convert UTC cron hour back to local time for display
-    const offsetHours = new Date().getTimezoneOffset() / 60;
-    const h = ((parseInt(hour, 10) - offsetHours) + 24) % 24;
+    const h = parseInt(hour, 10);
     if (dow !== '*')       return { frequency: 'weekly',      param: dow,               hour: h };
     if (dom.includes(',')) return { frequency: 'fortnightly', param: dom,               hour: h };
     if (month === '*/3')   return { frequency: 'quarterly',   param: parseInt(dom, 10), hour: h };
@@ -62,9 +58,19 @@ function parseCronToSelection(cronExpr) {
   }
 }
 
+// Convert a UTC hour (0–23) to a human-readable local time label
+function utcHourToLocalLabel(utcHour) {
+  const d = new Date();
+  d.setUTCHours(parseInt(utcHour, 10), 0, 0, 0);
+  const h = d.getHours();
+  if (h === 0)  return 'midnight';
+  if (h === 12) return 'noon';
+  return h < 12 ? `${h}am` : `${h - 12}pm`;
+}
+
 function scheduleDescription(cronExpr) {
   const sel = parseCronToSelection(cronExpr);
-  const timeLabel = { 0: 'midnight', 6: '6am', 12: 'noon', 18: '6pm' }[sel.hour] || `${sel.hour}:00`;
+  const timeLabel = utcHourToLocalLabel(sel.hour);
   if (sel.frequency === 'weekly') {
     const dayLabel = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][parseInt(sel.param, 10)];
     return `Every ${dayLabel} at ${timeLabel}`;
@@ -111,9 +117,8 @@ function buildScheduleSentenceHTML(sel) {
     }).join('');
   }
 
-  const timeOptions = [
-    ['0','midnight'],['6','6am'],['12','noon'],['18','6pm'],
-  ].map(([v, l]) => `<option value="${v}"${parseInt(v, 10) === parseInt(hour, 10) ? ' selected' : ''}>${l}</option>`).join('');
+  const timeOptions = [0, 6, 12, 18]
+    .map(v => `<option value="${v}"${v === parseInt(hour, 10) ? ' selected' : ''}>${utcHourToLocalLabel(v)}</option>`).join('');
 
   return `<div class="schedule-sentence">
       <span class="schedule-connector">Sync</span>
