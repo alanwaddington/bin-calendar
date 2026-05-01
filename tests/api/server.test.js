@@ -57,10 +57,37 @@ describe('server API', () => {
   test('POST /api/properties with valid body returns 201 with id', async () => {
     const res = await request(app)
       .post('/api/properties')
-      .send({ label: 'Home', uprn: '12345', calendar_type: 'google' });
+      .send({ label: 'Home', ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics', calendar_type: 'google' });
 
     expect(res.status).toBe(201);
     expect(res.body.id).toBeDefined();
+  });
+
+  test('POST /api/properties with webcal url returns 201', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'webcal://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics', calendar_type: 'google' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBeDefined();
+  });
+
+  test('POST /api/properties without ics_url returns 400', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', calendar_type: 'google' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Missing fields/i);
+  });
+
+  test('POST /api/properties with invalid ics_url format returns 400', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'ftp://not-a-valid-scheme.com/cal.ics', calendar_type: 'google' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid ICS URL/i);
   });
 
   test('POST /api/properties with missing fields returns 400', async () => {
@@ -137,18 +164,28 @@ describe('server API', () => {
   test('PUT /api/properties/:id with valid body returns ok', async () => {
     const res = await request(app)
       .put('/api/properties/1')
-      .send({ label: 'Updated Home', uprn: '99999' });
+      .send({ label: 'Updated Home', ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics' });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
   });
 
-  test('PUT /api/properties/:id with missing fields returns 400', async () => {
+  test('PUT /api/properties/:id without ics_url returns 400', async () => {
     const res = await request(app)
       .put('/api/properties/1')
       .send({ label: 'Home' });
 
     expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Missing fields/i);
+  });
+
+  test('PUT /api/properties/:id with invalid ics_url format returns 400', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'not-a-url' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid ICS URL/i);
   });
 
   test('GET /api/google/auth-url/:propertyId returns auth URL when configured', async () => {
@@ -347,6 +384,18 @@ describe('server API', () => {
     expect(res.status).toBe(500);
   });
 
+
+  test('GET /api/properties returns ics_url in response', async () => {
+    const icsUrl = 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics';
+    mockPrepare.all.mockReturnValue([
+      { id: 1, label: 'Home', ics_url: icsUrl, calendar_type: 'google', connected: 1, credential_status: 'ok' },
+    ]);
+
+    const res = await request(app).get('/api/properties');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toHaveProperty('ics_url', icsUrl);
+  });
 
   test('GET /api/properties returns credential_status in response', async () => {
     mockPrepare.all.mockReturnValue([

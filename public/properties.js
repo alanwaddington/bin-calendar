@@ -321,9 +321,14 @@ function buildPropertyAccordion(p) {
           <label>Label</label>
           <input id="prop-label-${p.id}" value="${escAttr(p.label)}">
         </div>
+        ${!p.ics_url ? `
+        <div class="badge badge-warning" style="display:block;margin-bottom:16px;padding:8px 12px;border-radius:6px;font-size:12px">
+          No ICS URL set \u2014 sync is paused for this property. Add the calendar URL below to resume.
+        </div>` : ''}
         <div class="form-group">
-          <label>UPRN</label>
-          <input id="prop-uprn-${p.id}" value="${escAttr(p.uprn)}">
+          <label>ICS Calendar URL</label>
+          <input id="prop-ics-url-${p.id}" value="${escAttr(p.ics_url || '')}" placeholder="https:// or webcal:// calendar URL">
+          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Find this URL on the <a href="https://www.east-ayrshire.gov.uk/Housing/RubbishAndRecycling/Collection-days/bin-collection-days.aspx" target="_blank" rel="noopener">East Ayrshire Council bin collection page</a> &mdash; search your address and copy the calendar subscription link.</p>
         </div>
         <div class="form-group">
           <label>Calendar type</label>
@@ -365,12 +370,12 @@ async function loadGoogleCalendarsForProp(propertyId, currentCalendarId) {
 
 async function savePropertyEdit(id) {
   const label = document.getElementById(`prop-label-${id}`)?.value.trim();
-  const uprn = document.getElementById(`prop-uprn-${id}`)?.value.trim();
+  const ics_url = document.getElementById(`prop-ics-url-${id}`)?.value.trim();
   const errorEl = document.getElementById(`prop-save-error-${id}`);
-  if (!label || !uprn) { errorEl.textContent = 'Label and UPRN are required'; return; }
+  if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
   try {
-    await api('PUT', `/api/properties/${id}`, { label, uprn });
+    await api('PUT', `/api/properties/${id}`, { label, ics_url });
     const p = _settingsProperties.find(prop => prop.id === id);
     if (p && p.connected && p.calendar_type === 'google') {
       const calSel = document.getElementById(`cal-select-${id}`);
@@ -588,9 +593,9 @@ function buildAddPropertyAccordion() {
           <input id="add-label" placeholder="e.g. Home">
         </div>
         <div class="form-group">
-          <label>UPRN</label>
-          <input id="add-uprn" placeholder="e.g. 127053058">
-          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Find your UPRN on your council&rsquo;s website or council tax letter.</p>
+          <label>ICS Calendar URL</label>
+          <input id="add-ics-url" placeholder="https:// or webcal:// calendar URL">
+          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Visit the <a href="https://www.east-ayrshire.gov.uk/Housing/RubbishAndRecycling/Collection-days/bin-collection-days.aspx" target="_blank" rel="noopener">East Ayrshire Council bin collection page</a>, search your address, and copy the calendar subscription link.</p>
         </div>
         <div class="form-group">
           <label>Calendar type</label>
@@ -674,12 +679,12 @@ function renderAddCalendarFields() {
 
 async function addSaveAndGetGoogleUrl() {
   const label = document.getElementById('add-label')?.value.trim();
-  const uprn = document.getElementById('add-uprn')?.value.trim();
+  const ics_url = document.getElementById('add-ics-url')?.value.trim();
   const errorEl = document.getElementById('add-form-error');
-  if (!label || !uprn) { errorEl.textContent = 'Label and UPRN are required'; return; }
+  if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
   try {
-    const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'google' });
+    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'google' });
     const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
     document.getElementById('add-google-auth-link').href = authUrl;
     document.getElementById('add-google-step1').style.display = 'none';
@@ -753,18 +758,18 @@ async function addFetchIcloudCalendars() {
 
 async function addSaveIcloud() {
   const label = document.getElementById('add-label')?.value.trim();
-  const uprn = document.getElementById('add-uprn')?.value.trim();
+  const ics_url = document.getElementById('add-ics-url')?.value.trim();
   const appleId = document.getElementById('add-apple-id')?.value.trim();
   const pass = document.getElementById('add-apple-pass')?.value.trim();
   const calUrl = document.getElementById('add-cal-url')?.value;
   const errorEl = document.getElementById('add-form-error');
-  if (!label || !uprn || !appleId || !pass || !calUrl) {
+  if (!label || !ics_url || !appleId || !pass || !calUrl) {
     errorEl.textContent = 'All fields are required \u2014 make sure you have fetched and selected a calendar';
     return;
   }
   errorEl.textContent = '';
   try {
-    const { id } = await api('POST', '/api/properties', { label, uprn, calendar_type: 'icloud' });
+    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'icloud' });
     await api('POST', `/api/properties/${id}/icloud`, {
       apple_id: appleId, app_specific_password: pass, calendar_url: calUrl,
     });

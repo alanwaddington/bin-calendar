@@ -3,7 +3,21 @@ jest.mock('node-ical', () => ({
 }));
 
 const ical = require('node-ical');
-const { parseIcs, fetchIcs } = require('../../src/ics');
+const { parseIcs, fetchIcs, normaliseIcsUrl } = require('../../src/ics');
+
+describe('normaliseIcsUrl', () => {
+  test('normaliseIcsUrl_withWebcalScheme_convertsToHttps', () => {
+    expect(normaliseIcsUrl('webcal://example.com/events.ics')).toBe('https://example.com/events.ics');
+  });
+
+  test('normaliseIcsUrl_withHttpsScheme_returnsUnchanged', () => {
+    expect(normaliseIcsUrl('https://example.com/events.ics')).toBe('https://example.com/events.ics');
+  });
+
+  test('normaliseIcsUrl_withHttpScheme_returnsUnchanged', () => {
+    expect(normaliseIcsUrl('http://example.com/events.ics')).toBe('http://example.com/events.ics');
+  });
+});
 
 describe('parseIcs', () => {
   beforeEach(() => {
@@ -123,6 +137,7 @@ describe('parseIcs', () => {
 });
 
 describe('fetchIcs', () => {
+  const TEST_ICS_URL = 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics';
   let originalFetch;
 
   beforeEach(() => {
@@ -141,7 +156,7 @@ describe('fetchIcs', () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('network error'));
     ical.sync.parseICS.mockReturnValue({});
 
-    await expect(fetchIcs('12345')).rejects.toThrow('ICS fetch failed after 3 attempts');
+    await expect(fetchIcs(TEST_ICS_URL)).rejects.toThrow('ICS fetch failed after 3 attempts');
     expect(global.fetch).toHaveBeenCalledTimes(3);
   });
 
@@ -151,7 +166,7 @@ describe('fetchIcs', () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
     ical.sync.parseICS.mockReturnValue({});
 
-    await expect(fetchIcs('12345')).rejects.toThrow('ICS fetch failed after 3 attempts');
+    await expect(fetchIcs(TEST_ICS_URL)).rejects.toThrow('ICS fetch failed after 3 attempts');
     expect(global.fetch).toHaveBeenCalledTimes(3);
   });
 
@@ -159,7 +174,7 @@ describe('fetchIcs', () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 });
     ical.sync.parseICS.mockReturnValue({});
 
-    await expect(fetchIcs('12345')).rejects.toThrow('HTTP 404');
+    await expect(fetchIcs(TEST_ICS_URL)).rejects.toThrow('HTTP 404');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -183,9 +198,38 @@ describe('fetchIcs', () => {
       },
     });
 
-    const result = await fetchIcs('12345');
+    const result = await fetchIcs(TEST_ICS_URL);
 
     expect(result.events).toHaveLength(1);
     expect(result.events[0].uid).toBe('evt-001@test');
+  });
+
+  test('fetchIcs_performsGetRequest_withNoBody', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      text: jest.fn().mockResolvedValue('fake ics content'),
+    });
+    ical.sync.parseICS.mockReturnValue({});
+
+    await fetchIcs(TEST_ICS_URL);
+
+    const [calledUrl, calledOptions] = global.fetch.mock.calls[0];
+    expect(calledUrl).toBe(TEST_ICS_URL);
+    expect(calledOptions?.body).toBeUndefined();
+    expect(calledOptions?.method).toBeUndefined();
+  });
+
+  test('fetchIcs_withWebcalUrl_convertsToHttpsBeforeFetching', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      text: jest.fn().mockResolvedValue('fake ics content'),
+    });
+    ical.sync.parseICS.mockReturnValue({});
+
+    const webcalUrl = 'webcal://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics';
+    await fetchIcs(webcalUrl);
+
+    const [calledUrl] = global.fetch.mock.calls[0];
+    expect(calledUrl).toBe('https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics');
   });
 });
