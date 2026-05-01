@@ -5,7 +5,7 @@
 
 ## Overview
 
-bin-calendar is a Synology NAS-hosted Docker application that fetches bin collection schedules from East Ayrshire Council and syncs them to personal Google or iCloud calendars. It supports multiple properties (UPRNs), each mapped to its own target calendar, and runs automatically on the 1st of each month.
+bin-calendar is a Synology NAS-hosted Docker application that fetches bin collection schedules from East Ayrshire Council (via ReCollect) and syncs them to personal Google or iCloud calendars. It supports multiple properties, each with its own ICS calendar URL mapped to a target calendar, and runs automatically on the 1st of each month.
 
 ---
 
@@ -17,9 +17,9 @@ East Ayrshire Council publishes bin collection schedules as downloadable ICS fil
 
 ## Scope
 
-- Single council: East Ayrshire Council
+- Single council: East Ayrshire Council (schedules served via ReCollect)
 - Two calendar targets: Google Calendar (OAuth2) and iCloud (CalDAV)
-- Multiple UPRN/calendar mappings, each syncing independently
+- Multiple property/calendar mappings, each syncing independently via a user-supplied ICS URL
 - Hosted as a Docker container on a Synology NAS
 - Web UI for configuration and monitoring
 
@@ -29,7 +29,6 @@ Out of scope (for now):
 - Email notifications on sync failure
 - Updating events that already exist but have changed (existing events are skipped by UID, not updated)
 - Selecting a non-primary Google Calendar
-- Caching getAddress.io results
 
 ---
 
@@ -42,12 +41,11 @@ bin-calendar/
 ├── src/
 │   ├── server.js              # Express app and routes
 │   ├── scheduler.js           # node-cron: monthly sync + weekly credential check
-│   ├── sync.js                # Orchestrates per-UPRN sync run
+│   ├── sync.js                # Orchestrates per-property sync run
 │   ├── credential-check.js    # Weekly credential validity check for all properties
-│   ├── ics.js                 # Fetches and parses EAC ICS endpoint
+│   ├── ics.js                 # Fetches and parses ICS URL (webcal:// normalised to https://)
 │   ├── google.js              # Google Calendar API integration (googleapis)
 │   ├── icloud.js              # iCloud CalDAV integration (tsdav)
-│   ├── uprn.js                # getAddress.io address/UPRN lookup
 │   └── db.js                  # SQLite via better-sqlite3, applies migrations at startup
 ├── src/migrations/            # Sequential SQL migration files (001.sql, 002.sql, ...)
 ├── public/                    # Web UI (plain HTML/CSS/JS, no framework)
@@ -61,13 +59,14 @@ bin-calendar/
 ## Data Model
 
 ### `properties`
-One row per UPRN/calendar mapping.
+One row per property/calendar mapping.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | INTEGER PK | Auto-increment |
 | label | TEXT | Friendly name (e.g. "Home", "Mum") |
-| uprn | TEXT | East Ayrshire UPRN |
+| uprn | TEXT | Legacy field — always `''` for new properties; retained for schema compatibility |
+| ics_url | TEXT | ICS calendar URL from the EAC/ReCollect bin collection page (`https://` or `webcal://`). Properties without an ICS URL are skipped during sync. |
 | calendar_type | TEXT | `google` or `icloud` |
 | calendar_id | TEXT | Google: `'primary'`. iCloud: the CalDAV calendar URL. Null until setup completes. |
 | credentials | TEXT | AES-256-GCM encrypted JSON (see Credentials JSON below); null for incomplete setup |
@@ -142,34 +141,11 @@ The SQLite database is stored at `/app/data/bin-calendar.db` inside the containe
 Current migrations:
 - `001.sql` — creates all initial tables, indexes, and the `updated_at` trigger
 - `002.sql` — adds `credential_status` and `credential_checked_at` columns to `properties`
+- `003.sql` — adds `bin_types` table and `events` cache table
+- `004.sql` — adds `settings` table (for user-configurable sync schedule)
+- `005.sql` — adds `ics_url TEXT` column to `properties`
 
 ---
-
-## UPRN Lookup
-
-Uses the **getAddress.io** REST API to resolve a postcode to a list of addresses with their UPRNs.
-
-**Endpoint:**
-```
-GET https://api.getAddress.io/autocomplete/{postcode}?api-key={GETADDRESS_API_KEY}
-```
-
-**Flow in the Add Property form:**
-1. User types a postcode into a "Find address" field and clicks "Search"
-2. App calls `GET /api/uprn/lookup?postcode=<postcode>` (proxied server-side to keep the API key out of the browser)
-3. Server calls getAddress.io with a 5-second timeout; on success returns the address list to the UI
-4. UI populates an address dropdown; user selects their address
-5. The UPRN from the selected result auto-populates the UPRN field; the postcode field clears
-6. User can then continue filling in the rest of the form normally, or override the UPRN manually
-
-**Error handling:**
-- Invalid postcode or no results: inline message "No addresses found for that postcode"
-- Timeout or API error: inline message "Address lookup unavailable — enter your UPRN manually"
-- Missing `GETADDRESS_API_KEY`: the "Find address" field is hidden and users enter the UPRN directly
-
-**Startup validation:** If `GETADDRESS_API_KEY` is absent, the app starts normally — the address lookup feature is disabled but the rest of the app is unaffected.
-
-**Prerequisite:** Sign up at getAddress.io and add `GETADDRESS_API_KEY` to the compose environment.
 
 ---
 
@@ -179,8 +155,7 @@ On startup, before accepting requests, the app:
 
 1. **Validates environment:** Asserts `ENCRYPTION_KEY` is present and exactly 64 hex characters (32 bytes). If missing or malformed, the process exits with a clear error message — the container will not start.
 2. **Google credentials:** If `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is absent, the app starts but the Google OAuth flow is unavailable. The Add Property form disables the Google calendar type and shows a configuration warning.
-3. **getAddress.io key:** If `GETADDRESS_API_KEY` is absent, the app starts normally but the address lookup field is hidden in the Add Property form — users enter UPRNs manually.
-4. **Applies DB migrations:** Runs any unapplied migration files.
+3. **Applies DB migrations:** Runs any unapplied migration files.
 5. **Recovers interrupted syncs:** Any `sync_runs` row with `status = 'running'` is updated to `status = 'failed'` with `error = 'Interrupted by restart'`. This releases the concurrency lock if the previous process crashed mid-sync.
 6. **Starts the scheduler** and begins accepting requests.
 
@@ -188,22 +163,23 @@ On startup, before accepting requests, the app:
 
 ## ICS Fetch
 
-East Ayrshire Council exposes an unauthenticated POST endpoint:
+East Ayrshire Council now serves bin collection schedules via **ReCollect**. Each property has a unique ICS subscription URL obtained from the EAC bin collection page. The URL is stored in the `ics_url` column of the `properties` table and entered by the user.
 
 ```
-POST https://www.east-ayrshire.gov.uk/WasteCalendarICSDownload
-Content-Type: application/x-www-form-urlencoded
-
-uprn=<UPRN>&captchaResponse=
+GET <ics_url>
 ```
 
-No session, cookies, or CAPTCHA handling required. The response is a valid ICS file with VEVENT blocks. Event UIDs follow the format `EAC_YYYYMMDD_N` and are used for deduplication.
+`webcal://` URLs are automatically normalised to `https://` at fetch time by `normaliseIcsUrl()` — the original URL is preserved in the database. No authentication, session, or cookies required. The response is a valid ICS file with VEVENT blocks used for deduplication.
+
+**How to find your ICS URL:** Visit the [EAC bin collection page](https://www.east-ayrshire.gov.uk/Housing/RubbishAndRecycling/Collection-days/bin-collection-days.aspx), search for your address, and copy the calendar subscription link. Paste it into the property's ICS Calendar URL field in the app.
 
 **Error handling:** The fetch uses a 10-second timeout and up to 3 retry attempts with exponential backoff (1s, 2s, 4s). A non-200 response, network timeout, or unparseable ICS body is treated as a fetch failure — the `sync_results` row records the error and the property is marked failed. The run continues for other properties.
 
+**Missing ICS URL:** Properties without an `ics_url` are skipped during sync with a descriptive message recorded in `sync_results`. They appear in the Properties table with a warning badge prompting the user to add the URL.
+
 **Empty ICS:** If the ICS parses successfully but contains zero VEVENT blocks, the sync for that property is treated as success with `events_added = 0` and `events_skipped = 0`.
 
-**Missing or unexpected UIDs:** If a VEVENT has no UID, skip it and log a warning in the `sync_results` error field (without failing the property). If the UID does not match the expected `EAC_YYYYMMDD_N` format, treat it as a unique event and attempt to insert it (the format check is advisory, not enforced).
+**Missing or unexpected UIDs:** If a VEVENT has no UID, skip it and log a warning in the `sync_results` error field (without failing the property). If the UID does not match the expected format, treat it as a unique event and attempt to insert it (the format check is advisory, not enforced).
 
 ---
 
@@ -214,7 +190,7 @@ No session, cookies, or CAPTCHA handling required. The response is a valid ICS f
 3. If no eligible properties exist, update the `sync_runs` row to `status = 'skipped'` and `completed_at = now()`. Write no `sync_results` rows. The Logs view shows this run as "Skipped — no properties configured."
 4. For each eligible property, run in parallel (no concurrency cap — acceptable for typical use of 2–5 properties):
    a. Record `started_at` for this property's `sync_results` row
-   b. POST to EAC endpoint with UPRN (with timeout and retry as specified above)
+   b. GET the property's `ics_url` (with timeout and retry as specified above); `webcal://` normalised to `https://` at fetch time
    c. Parse VEVENT blocks from the ICS response
    d. If zero events, write success result and continue
    e. Determine the date range: from the earliest to latest `DTSTART` in the fetched ICS
@@ -263,7 +239,7 @@ Uses the `googleapis` npm package with OAuth2.
 
 ### Setup (two-phase flow, once per Google calendar)
 
-1. User fills in label and UPRN, selects "Google" as the calendar type
+1. User fills in label and ICS Calendar URL, selects "Google" as the calendar type
 2. User clicks "Save & Connect Google Calendar" — the property is saved to the DB with `calendar_id = 'primary'` and `credentials = null`
 3. App generates a cryptographically random 32-byte nonce (hex-encoded), stores it in `oauth_state` with the `property_id` and a 10-minute expiry, then constructs the OAuth `state` value as `base64url({ "property_id": <id>, "nonce": "<hex>" })`
 4. User is redirected to the Google OAuth2 consent screen
@@ -325,20 +301,20 @@ Sidebar navigation layout with three sections:
 - Next scheduled sync date displayed
 
 ### Properties
-- Table: Label | UPRN | Calendar Type | Status | Actions
+- Table: Label | Calendar Type | Status | Actions
 - Badge states per row: green "Connected", amber "Not connected", red "Credentials expired" (when `credential_status === 'invalid'`)
 - `credential_checked_at` date shown below the badge when available
+- Properties without an `ics_url` display a warning badge prompting the user to add the URL
 - Actions per row:
   - Edit button (always)
   - Reconnect button: shown for all Google properties; shown for iCloud properties when `credential_status === 'invalid'`
   - Delete button (always)
 - Add/Edit form:
   - Label (text)
-  - UPRN (text)
+  - ICS Calendar URL (text, `https://` or `webcal://`) — with help text linking to the EAC bin collection page
   - Calendar type selector (Google disabled with warning if Google env vars not set)
   - *If Google*: "Save & Connect Google Calendar" button → two-phase OAuth2 flow
   - *If iCloud*: Apple ID, app-specific password, "Fetch Calendars" button, calendar dropdown
-  - Postcode "Find address" field + address dropdown (auto-populates UPRN; hidden if `GETADDRESS_API_KEY` not set)
 
 ### Logs
 - Scrollable list of sync runs, newest first
@@ -454,7 +430,6 @@ services:
       - GOOGLE_CLIENT_SECRET=<your-google-client-secret>
       - GOOGLE_REDIRECT_URI=http://<nas-ip>:3000/auth/google/callback
       - PORT=3000                        # optional, defaults to 3000
-      - GETADDRESS_API_KEY=<your-key>   # optional; disables address lookup if absent
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 60s
@@ -509,7 +484,6 @@ Or use Container Manager UI: stop, pull, start. The SQLite database persists in 
 | `googleapis` | Google Calendar API |
 | `tsdav` | iCloud CalDAV |
 | `node-ical` | ICS parsing |
-| `node-fetch` or built-in `fetch` | getAddress.io API calls |
 
 ---
 
