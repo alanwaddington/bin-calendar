@@ -35,24 +35,30 @@ app.get('/api/config', (req, res) => {
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
   const rows = getDb().prepare(
-    'SELECT id, label, uprn, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
+    'SELECT id, label, uprn, ics_url, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
   ).all();
   res.json(rows);
 });
 
+function isValidIcsUrl(url) {
+  return typeof url === 'string' && (url.startsWith('https://') || url.startsWith('webcal://'));
+}
+
 app.post('/api/properties', (req, res) => {
-  const { label, uprn, calendar_type } = req.body;
-  if (!label || !uprn || !calendar_type) return res.status(400).json({ error: 'Missing fields' });
+  const { label, ics_url, calendar_type } = req.body;
+  if (!label || !ics_url || !calendar_type) return res.status(400).json({ error: 'Missing fields' });
+  if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
   const result = getDb().prepare(
-    'INSERT INTO properties (label, uprn, calendar_type, calendar_id) VALUES (?, ?, ?, ?)'
-  ).run(label, uprn, calendar_type, calendar_type === 'google' ? 'primary' : null);
+    'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null);
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/properties/:id', (req, res) => {
-  const { label, uprn } = req.body;
-  if (!label || !uprn) return res.status(400).json({ error: 'Missing fields' });
-  getDb().prepare('UPDATE properties SET label = ?, uprn = ? WHERE id = ?').run(label, uprn, req.params.id);
+  const { label, ics_url } = req.body;
+  if (!label || !ics_url) return res.status(400).json({ error: 'Missing fields' });
+  if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
+  getDb().prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
   res.json({ ok: true });
 });
 
