@@ -56,7 +56,6 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
-      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       ics_url: null,
       calendar_type: 'google',
       calendar_id: 'primary',

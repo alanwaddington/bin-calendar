@@ -35,7 +35,7 @@ app.get('/api/config', (req, res) => {
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
   const rows = getDb().prepare(
-    'SELECT id, label, uprn, ics_url, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
+    'SELECT id, label, ics_url, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
   ).all();
   res.json(rows);
 });
