@@ -51,11 +51,48 @@ describe('sync', () => {
     expect(result.message).toMatch(/already in progress/i);
   });
 
-  test('runSync_withGoogleProperty_callsGoogleInsertEvent', async () => {
+  test('runSync_withPropertyMissingIcsUrl_skipsPropertyWithWarning', async () => {
     const property = {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      ics_url: null,
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+
+    const result = await runSync();
+
+    expect(fetchIcs).not.toHaveBeenCalled();
+    expect(result.overallStatus).toBe('failed');
+  });
+
+  test('runSync_withGoogleProperty_callsFetchIcsWithIcsUrl', async () => {
+    const ICS_URL = 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics';
+    const property = {
+      id: 1,
+      label: 'Home',
+      ics_url: ICS_URL,
+      calendar_type: 'google',
+      calendar_id: 'primary',
+      credentials: 'encrypted',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({ events: [], warnings: [] });
+
+    await runSync();
+
+    expect(fetchIcs).toHaveBeenCalledWith(ICS_URL);
+  });
+
+  test('runSync_withGoogleProperty_callsGoogleInsertEvent', async () => {
+    const property = {
+      id: 1,
+      label: 'Home',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -88,6 +125,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud',
       calendar_id: 'https://caldav.icloud.com/123',
       credentials: 'encrypted',
@@ -119,6 +157,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -145,8 +184,8 @@ describe('sync', () => {
 
   test('runSync_whenPropertyFails_continuesWithOthers', async () => {
     const properties = [
-      { id: 1, label: 'Home', uprn: '11111', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc1' },
-      { id: 2, label: 'Work', uprn: '22222', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc2' },
+      { id: 1, label: 'Home', uprn: '11111', ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/P1/services/50014/events.en-GB.ics', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc1' },
+      { id: 2, label: 'Work', uprn: '22222', ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/P2/services/50014/events.en-GB.ics', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc2' },
     ];
     mockPrepareReturn.all.mockReturnValueOnce(properties);
 
@@ -175,6 +214,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -193,6 +233,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -222,6 +263,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -244,6 +286,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -267,6 +310,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -289,6 +333,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',
@@ -319,6 +364,7 @@ describe('sync', () => {
   test('runSync_onSuccessfulPropertySync_cachesEvents', async () => {
     const property = {
       id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
     };
     mockPrepareReturn.all.mockReturnValueOnce([property]);
@@ -345,6 +391,7 @@ describe('sync', () => {
   test('runSync_onPropertyFailure_doesNotCacheEvents', async () => {
     const property = {
       id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
     };
     mockPrepareReturn.all.mockReturnValueOnce([property]);
@@ -362,6 +409,7 @@ describe('sync', () => {
       id: 1,
       label: 'Home',
       uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google',
       calendar_id: 'primary',
       credentials: 'encrypted',

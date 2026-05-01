@@ -72,8 +72,13 @@ function updateCredentialStatus(db, propertyId, status) {
 
 async function syncProperty(db, runId, property) {
   const startedAt = new Date().toISOString();
+  if (!property.ics_url) {
+    const msg = 'No ICS URL configured — update the property with a calendar URL from the council website';
+    writeResult(db, runId, property.id, 0, 0, msg, startedAt);
+    return { propertyId: property.id, error: msg };
+  }
   try {
-    const { events, warnings } = await fetchIcs(property.uprn);
+    const { events, warnings } = await fetchIcs(property.ics_url);
 
     if (events.length === 0) {
       updateCredentialStatus(db, property.id, 'ok');
