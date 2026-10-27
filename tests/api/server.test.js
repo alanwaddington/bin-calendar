@@ -465,6 +465,18 @@ describe('server API', () => {
     expect(res.body.error).toMatch(/not found/i);
   });
 
+  test('getPropertyEvents_withDbError_returns500WithJsonError', async () => {
+    mockPrepare.get.mockReturnValueOnce({ id: 1 });
+    mockPrepare.all.mockImplementationOnce(() => {
+      throw new Error('database is locked');
+    });
+
+    const res = await request(app).get('/api/properties/1/events');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('database is locked');
+  });
+
   test('getPropertyEvents_withNoEvents_returnsEmptyArray', async () => {
     mockPrepare.get.mockReturnValueOnce({ id: 1 });
     mockPrepare.all.mockReturnValueOnce([]);
