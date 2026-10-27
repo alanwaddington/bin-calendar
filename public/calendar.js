@@ -6,6 +6,7 @@ let _calEvents = [];
 let _calMonthsWithData = [];
 let _calViewYear = null;
 let _calViewMonth = null; // 0-indexed
+let _calRequestToken = 0; // guards against out-of-order responses when switching property quickly
 
 async function loadCalendar() {
   const el = document.getElementById('view-calendar');
@@ -80,22 +81,28 @@ function onCalendarPropertyChange(value) {
 
 async function selectCalendarProperty(id) {
   _calSelectedId = id;
+  const token = ++_calRequestToken;
   const select = document.getElementById('cal-property-select');
   if (select) select.value = String(id);
 
   const scheduleEl = document.getElementById('cal-schedule');
   if (scheduleEl) scheduleEl.innerHTML = '<div class="hero-card-empty" style="opacity:0.4">Loading…</div>';
 
+  let events;
   try {
-    const { events } = await api('GET', `/api/properties/${id}/events`);
-    _calEvents = events;
+    ({ events } = await api('GET', `/api/properties/${id}/events`));
   } catch (err) {
+    if (token !== _calRequestToken) return; // a newer selection has since started; drop this stale error
     showToast(err.message, 'error');
     if (scheduleEl) {
       scheduleEl.innerHTML = `<p style="color:var(--text-3)">Could not load this property's schedule: ${escCalHtml(err.message)}</p>`;
     }
     return;
   }
+
+  if (token !== _calRequestToken) return; // a newer selection has since started; drop this stale response
+
+  _calEvents = events;
 
   // restore the two schedule containers (may have been replaced by a prior error/empty state)
   if (scheduleEl) scheduleEl.innerHTML = '<div class="cal-grid" id="cal-grid"></div><div class="cal-agenda" id="cal-agenda"></div>';
@@ -213,12 +220,16 @@ function renderCalendarMonth() {
 }
 
 function renderCalendarMarker(ev) {
+  // Server-side validation already enforces this (sanitiseBinTypeInput), but
+  // the colour is interpolated into a style attribute, so re-validate here
+  // rather than trust an invariant enforced in a different layer.
+  const safeColour = /^#[0-9a-f]{6}$/i.test(ev.colour) ? ev.colour : '#6b7a99';
   const labelText = ev.matched
     ? escCalHtml(ev.label)
     : `${escCalHtml(ev.label)} <span class="cal-marker-unmatched">(uncategorised)</span>`;
   return `
     <div class="cal-marker">
-      <span class="cal-marker-dot" style="background:${escCalAttr(ev.colour)}"></span>
+      <span class="cal-marker-dot" style="background:${safeColour}"></span>
       <span class="cal-marker-label">${labelText}</span>
     </div>`;
 }
@@ -279,8 +290,4 @@ function renderCalendarAgenda(year, month0, byDate, todayStr) {
 
 function escCalHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function escCalAttr(str) {
-  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
