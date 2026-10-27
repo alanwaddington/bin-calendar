@@ -86,7 +86,7 @@ describe('cacheEvents', () => {
   });
 
   test('cacheEvents_storesStartDateAsIsoDateString', () => {
-    const futureDate = '2026-06-15T07:00:00.000Z';
+    const futureDate = getFutureDate(30);
     const events = [
       { uid: 'uid-1', summary: 'Grey Bin', start: new Date(futureDate), end: new Date(futureDate) },
     ];
@@ -94,7 +94,7 @@ describe('cacheEvents', () => {
     syncModule.cacheEvents(db, propertyId, events);
 
     const row = db.prepare("SELECT start_date FROM events WHERE uid = 'uid-1'").get();
-    expect(row.start_date).toBe('2026-06-15');
+    expect(row.start_date).toBe(futureDate.slice(0, 10));
   });
 
   test('cacheEvents_withMultipleEvents_insertsAllInSingleTransaction', () => {
