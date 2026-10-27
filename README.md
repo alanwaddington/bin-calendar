@@ -9,6 +9,7 @@ A self-hosted Docker application that fetches bin collection schedules from East
 - Multiple properties supported — each syncs independently
 - Configurable sync schedule via a custom cron expression (default: 1st of each month)
 - Manual sync via the web UI
+- Per-property calendar view — month grid (desktop) / agenda list (mobile) of synced collection dates, with month navigation and a property switcher
 - Sync history and per-property logs
 - Credentials encrypted at rest (AES-256-GCM)
 
@@ -166,6 +167,7 @@ Pull requests also run the test job (no Docker build).
 | POST | `/api/properties` | Create a property |
 | PUT | `/api/properties/:id` | Update label and UPRN |
 | DELETE | `/api/properties/:id` | Delete a property |
+| GET | `/api/properties/:id/events` | Cached collection events for a property (calendar view) |
 | GET | `/api/google/auth-url/:propertyId` | Start Google OAuth flow |
 | POST | `/api/google/complete` | Complete Google OAuth (paste callback URL) |
 | GET | `/api/google/calendars/:propertyId` | List Google calendars for a property |
