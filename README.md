@@ -109,7 +109,7 @@ Steps 1–6 above are the one-time initial setup. After that, merges to `main` d
 
 1. DSM → **Control Panel → Terminal & SNMP → Enable SSH service** (if not already on). Note the port (default `22`).
 2. From your Windows machine: `ssh <your-dsm-username>@<nas-ip> -p 22`
-3. Docker commands on DSM sometimes need `sudo` unless your user is in the `docker` group — if you already run `docker compose up -d` for bin-calendar without `sudo`, you're fine; otherwise prefix the `docker` commands below with `sudo`.
+3. **On Synology, plan to prefix every `docker`/`docker compose` command below with `sudo`.** DSM's regular SSH users don't have direct access to the Docker socket by default (confirmed: a bare `docker login` fails with `permission denied while trying to connect to the Docker daemon socket`). The commands below show the `sudo` form directly rather than as an aside.
 
 #### B. Create one GitHub token for both GHCR pull and runner registration
 
@@ -123,20 +123,20 @@ Rather than two separate tokens, one classic PAT with both scopes covers everyth
 #### C. Authenticate Docker on the NAS (skip if the GHCR package is public)
 
 ```bash
-docker login ghcr.io -u alanwaddington
+sudo docker login ghcr.io -u alanwaddington
 # password: paste the token from step B
 ```
 
 Confirm it worked:
 ```bash
-docker pull ghcr.io/alanwaddington/bin-calendar:latest
+sudo docker pull ghcr.io/alanwaddington/bin-calendar:latest
 ```
 
 #### D. Launch the runner container
 
 ```bash
 mkdir -p /volume1/docker/gh-runner
-docker run -d --name gh-runner --restart unless-stopped \
+sudo docker run -d --name gh-runner --restart unless-stopped \
   -v /volume1/docker/gh-runner:/home/runner \
   -v /volume1/docker/bin-calendar:/volume1/docker/bin-calendar \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -157,27 +157,28 @@ What each part is doing:
 #### E. Verify it registered
 
 ```bash
-docker logs gh-runner
+sudo docker logs gh-runner
 ```
 Look for a line like `Listening for Jobs`. Then on GitHub: repo → **Settings → Actions → Runners** should show `nas` with a green **Idle** status. If it's missing:
-- `docker logs gh-runner` will usually show why (bad token, network issue, etc.)
+- `sudo docker logs gh-runner` will usually show why (bad token, network issue, etc.)
 - Re-check the PAT has the `repo` scope and hasn't expired
-- `docker ps` to confirm the container is actually running, not restart-looping (`docker ps -a` if it's not in the list at all)
+- `sudo docker ps` to confirm the container is actually running, not restart-looping (`sudo docker ps -a` if it's not in the list at all)
 
 #### F. Test the whole pipeline end to end
 
 Push any trivial change to `main` (or merge a PR into it) and watch: repo → **Actions** tab → the workflow run should show `test` → `build` → `deploy` all green, with `deploy` showing `nas` as the runner it executed on. Then confirm on the NAS itself:
 ```bash
-docker ps   # bin-calendar's "CREATED" time should be recent
-docker compose -f /volume1/docker/bin-calendar/docker-compose.yml logs --tail 20 bin-calendar
+sudo docker ps   # bin-calendar's "CREATED" time should be recent
+sudo docker compose -f /volume1/docker/bin-calendar/docker-compose.yml logs --tail 20 bin-calendar
 ```
 
 #### Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| `deploy` job stays queued forever in the Actions tab | Runner isn't registered, or is offline — check `docker ps` and `docker logs gh-runner` on the NAS |
-| Runner shows **Offline** on GitHub | Container isn't running (`docker ps -a`) or lost network — `docker start gh-runner` |
+| Bare `docker` command fails with `permission denied ... docker daemon socket` | Normal on Synology — prefix the command with `sudo` |
+| `deploy` job stays queued forever in the Actions tab | Runner isn't registered, or is offline — check `sudo docker ps` and `sudo docker logs gh-runner` on the NAS |
+| Runner shows **Offline** on GitHub | Container isn't running (`sudo docker ps -a`) or lost network — `sudo docker start gh-runner` |
 | `deploy` step fails on `docker compose pull` with `unauthorized` | GHCR login (step C) wasn't done, or the PAT lacks `read:packages` and/or has expired |
 | `deploy` step fails with `no such file or directory` on the `cd` | The two paths in the `-v` mount (step D) don't match — both sides must be `/volume1/docker/bin-calendar` |
 | Runner re-registers as a *new* runner every restart instead of reconnecting | Using `RUNNER_TOKEN` instead of `ACCESS_TOKEN` — switch to `ACCESS_TOKEN` as shown above |
