@@ -102,15 +102,22 @@ function formatMatchedLabel(label, summary) {
   return `${label} (${summary})`;
 }
 
+// A plain `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match
+// || '%'` fans out to one row per matching rule when an event's summary
+// matches more than one bin type - this correlated subquery collapses that
+// to a single match (lowest id wins) instead, so every endpoint that joins
+// events to bin_types agrees on how many rows one event produces.
+const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON bt.id = (
+      SELECT b2.id FROM bin_types b2
+      WHERE e.summary LIKE '%' || b2.summary_match || '%'
+      ORDER BY b2.id LIMIT 1
+    )`;
+
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
     SELECT e.uid, e.start_date AS date, e.summary, bt.label, bt.colour
     FROM events e
-    LEFT JOIN bin_types bt ON bt.id = (
-      SELECT b2.id FROM bin_types b2
-      WHERE e.summary LIKE '%' || b2.summary_match || '%'
-      ORDER BY b2.id LIMIT 1
-    )
+    ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
     ORDER BY e.start_date ASC, e.uid ASC
   `).all(propertyId);
@@ -273,7 +280,7 @@ app.get('/api/next-collection', (req, res) => {
       p.label             AS property_label
     FROM events e
     JOIN properties p ON p.id = e.property_id
-    LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'
+    ${BIN_TYPE_JOIN_SQL}
     WHERE e.start_date >= date('now')
     ORDER BY e.start_date ASC
   `).all();
@@ -285,6 +292,10 @@ app.get('/api/next-collection', (req, res) => {
       daysUntil: r.days_until,
       summary: r.summary,
       label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
+      // The pre-formatting value (bare bin_types.label, or the summary when
+      // unmatched) - a stable key for de-duplicating across properties,
+      // since `label` above can now embed a property-specific raw summary.
+      rawLabel: r.label || r.summary,
       colour: r.colour || '#6b7a99',
       propertyId: r.property_id,
       propertyLabel: r.property_label,

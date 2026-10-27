@@ -633,6 +633,64 @@ describe('server API', () => {
     expect(res.body.collections[0].colour).toBe('#6b7a99');
   });
 
+  // PR #27 review finding M2: the dashboard de-duplicates hero chips by
+  // display label, which only worked while labels were canonical. Now that
+  // a matched label can carry an appended/alternate raw summary, two
+  // properties sharing a collection date with differently-worded summaries
+  // for the same bin type produce two *different* formatted labels. rawLabel
+  // exposes the pre-formatting value (the matched bin_types.label, or the
+  // summary when unmatched) as a stable de-duplication key.
+  test('getNextCollection_withMatchedBinType_includesRawLabelForStableDeduplication', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-02',
+        days_until: 4,
+        summary: 'Grey Bin Collection',
+        label: 'General Waste',
+        colour: '#6b7280',
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections[0].rawLabel).toBe('General Waste');
+  });
+
+  test('getNextCollection_withNoBinTypeMatch_rawLabelFallsBackToSummary', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-02',
+        days_until: 4,
+        summary: 'Purple Bin Collection',
+        label: null,
+        colour: null,
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections[0].rawLabel).toBe('Purple Bin Collection');
+  });
+
+  // PR #27 review finding M2: /api/next-collection used a fan-out
+  // `LIKE` join (one row per matching bin_types rule) while
+  // getPropertyEventsRows used a de-duplicating correlated subquery - the
+  // two endpoints disagreed about how many rows one event produces. This
+  // brings next-collection onto the same lowest-id-wins subquery.
+  test('getNextCollection_sqlUsesSameDeduplicatingSubqueryAsPropertyEvents', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/next-collection');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
+    expect(sql).toMatch(/LIMIT 1/i);
+    expect(sql).not.toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+  });
+
   // --- GET /api/bin-types ---
 
   test('getBinTypes_returns200WithArray', async () => {

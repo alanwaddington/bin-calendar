@@ -227,10 +227,14 @@ function renderCalendarMarker(ev) {
   const labelText = ev.matched
     ? escCalHtml(ev.label)
     : `${escCalHtml(ev.label)} <span class="cal-marker-unmatched">(uncategorised)</span>`;
+  // A matched label can now embed a full raw feed summary (formatMatchedLabel
+  // on the server) and run considerably longer than a plain configured
+  // label. CSS visually clamps .cal-marker-label, so `title` keeps the full
+  // text recoverable on hover even when it's clipped.
   return `
     <div class="cal-marker">
       <span class="cal-marker-dot" style="background:${safeColour}"></span>
-      <span class="cal-marker-label">${labelText}</span>
+      <span class="cal-marker-label" title="${escCalAttr(ev.label)}">${labelText}</span>
     </div>`;
 }
 
@@ -290,4 +294,8 @@ function renderCalendarAgenda(year, month0, byDate, todayStr) {
 
 function escCalHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escCalAttr(str) {
+  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }

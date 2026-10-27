@@ -42,8 +42,11 @@ ENCRYPTION_KEY=$(openssl rand -hex 32) node src/server.js
 
 Follow the `/analyse` → `/design` → `/develop` → `/pr-reviewer` → `/merge` lifecycle for all features.
 
+**Exception — small, ad-hoc bug fixes:** a fix scoped to a single reported symptom (no new feature, no architectural decision, fixable in one function/endpoint) may skip straight to a `fix/<short-description>` branch and strict TDD, without a tracked issue or `/analyse`/`/design`. Still run `/pr-reviewer` before merging — without a linked issue, the reviewer derives its acceptance criteria from the bug report and the PR's own description of its fix, which is weaker than requirements agreed up front, so give any finding it raises real scrutiny rather than treating "it matches what the PR claims" as sufficient. PRs #25–#27 used this exception.
+
 ### Branching
 - Feature branches: `feature/<issue-number>-<short-description>`
+- Ad-hoc bug-fix branches: `fix/<short-description>` (see exception above)
 - Always branch from `main`
 
 ### TDD (Strict)
