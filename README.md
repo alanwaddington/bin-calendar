@@ -129,14 +129,21 @@ Tests run with coverage. The 80% threshold is enforced — the build fails if co
 ```
 tests/
 ├── helpers/
-│   └── testDb.js           # In-memory SQLite factory
+│   ├── testDb.js              # In-memory SQLite factory + real migrations
+│   └── browserDom.js          # jsdom window loading the real public/*.js files
 ├── fixtures/
-│   └── ics-samples.js      # ICS text samples for parsing tests
+│   └── ics-samples.js         # ICS text samples for parsing tests
 ├── unit/
 │   ├── crypto.test.js
 │   ├── ics.test.js
 │   ├── scheduler.test.js
-│   └── db.test.js
+│   ├── db.test.js
+│   ├── credential-check.test.js
+│   ├── google-credentials.test.js
+│   ├── icloud-credentials.test.js
+│   ├── sync-cache.test.js
+│   ├── calendar-events.test.js    # GET /api/properties/:id/events against a real DB
+│   └── calendar-frontend.test.js  # public/calendar.js via browserDom.js
 ├── integration/
 │   ├── sync.test.js
 │   ├── google.test.js
