@@ -90,9 +90,10 @@ Follow the `/analyse` → `/design` → `/develop` → `/pr-reviewer` → `/merg
 
 - Docker on Synology NAS
 - Image published to `ghcr.io/alanwaddington/bin-calendar:latest` via GitHub Actions on push to `main`
+- Deploy is automatic: a self-hosted GitHub Actions runner installed on the NAS itself picks up the `deploy` job after `build` succeeds and runs `docker compose pull && up -d` in `/volume1/docker/bin-calendar` — no inbound ports opened, no manual pull needed. See the README's "Automated deployment (self-hosted runner)" section for setup/troubleshooting.
 - Data volume: `/volume1/docker/bin-calendar/data` → `/app/data`
 - Database file: `/app/data/bin-calendar.db`
-- CI/CD: tests must pass before image is built
+- CI/CD: tests must pass before image is built; the image only ships to the NAS if `test` → `build` → `deploy` all succeed
 
 ## GitHub Project
 
