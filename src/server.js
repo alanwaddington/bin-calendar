@@ -79,6 +79,19 @@ app.get('/api/properties/:id/credential-status', async (req, res) => {
   }
 });
 
+// A bin_types rule's label replaces the whole raw ICS summary when matched,
+// which silently drops any extra qualifier the council's feed adds (e.g.
+// "Trolley+food" matching a "Trolley" rule labelled "General Waste" loses
+// the "+food" part entirely). Appending the raw summary in parens preserves
+// it without trying to algorithmically splice fragments together - that
+// approach can go wrong for case-insensitive duplicates (e.g. "Garden
+// waste" matching a "Garden Waste" label) and for transitional one-off
+// summaries with parenthetical caveats.
+function formatMatchedLabel(label, summary) {
+  if (label.trim().toLowerCase() === summary.trim().toLowerCase()) return label;
+  return `${label} (${summary})`;
+}
+
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
     SELECT e.uid, e.start_date AS date, e.summary, bt.label, bt.colour
@@ -96,7 +109,7 @@ function getPropertyEventsRows(db, propertyId) {
     uid: r.uid,
     date: r.date,
     summary: r.summary,
-    label: r.label || r.summary,
+    label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
     colour: r.colour || '#6b7a99',
     matched: r.label != null,
   }));
@@ -261,7 +274,7 @@ app.get('/api/next-collection', (req, res) => {
       date: r.date,
       daysUntil: r.days_until,
       summary: r.summary,
-      label: r.label || r.summary,
+      label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
       colour: r.colour || '#6b7a99',
       propertyId: r.property_id,
       propertyLabel: r.property_label,
@@ -363,4 +376,4 @@ if (require.main === module) {
   app.listen(PORT, () => console.log(`bin-calendar running on port ${PORT}`));
 }
 
-module.exports = { app, getPropertyEventsRows };
+module.exports = { app, getPropertyEventsRows, formatMatchedLabel };

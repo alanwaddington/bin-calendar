@@ -448,8 +448,8 @@ describe('server API', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.events).toEqual([
-      { uid: 'uid-1', date: '2026-11-03', summary: 'Trolley+food', label: 'General Waste', colour: '#6b7280', matched: true },
-      { uid: 'uid-2', date: '2026-11-10', summary: 'Trolley+food', label: 'General Waste', colour: '#6b7280', matched: true },
+      { uid: 'uid-1', date: '2026-11-03', summary: 'Trolley+food', label: 'General Waste (Trolley+food)', colour: '#6b7280', matched: true },
+      { uid: 'uid-2', date: '2026-11-10', summary: 'Trolley+food', label: 'General Waste (Trolley+food)', colour: '#6b7280', matched: true },
     ]);
 
     const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
@@ -503,7 +503,7 @@ describe('server API', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(1);
-    expect(res.body.events[0].label).toBe('General Waste');
+    expect(res.body.events[0].label).toBe('General Waste (General waste+food (+food only after transition week))');
 
     const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
     expect(eventsSql).toMatch(/LIMIT 1/i);
@@ -597,7 +597,7 @@ describe('server API', () => {
       date: '2026-04-02',
       daysUntil: 4,
       summary: 'Grey Bin Collection',
-      label: 'General Waste',
+      label: 'General Waste (Grey Bin Collection)',
       colour: '#6b7280',
       propertyId: 1,
       propertyLabel: '12 Main St',

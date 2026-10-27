@@ -26,9 +26,35 @@ describe('getPropertyEventsRows', () => {
     const events = getPropertyEventsRows(db, propertyId);
 
     expect(events).toHaveLength(1);
-    expect(events[0].label).toBe('General Waste');
+    expect(events[0].label).toBe('General Waste (Grey/Blue Mixed Bin)');
     expect(events[0].colour).toBe('#6b7280');
     expect(events[0].matched).toBe(true);
+  });
+
+  test('getPropertyEventsRows_whenSummaryHasExtraInfoBeyondTheMatch_appendsRawSummaryInParens', () => {
+    // Real-world bug: East Ayrshire's feed sends "Trolley+food", but the
+    // bin_types label for the 'Trolley' match is just "General Waste" -
+    // the "+food" qualifier must not be silently dropped.
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u3', 'Grey Bin Plus Food', '2026-11-07')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events[0].label).toBe('General Waste (Grey Bin Plus Food)');
+  });
+
+  test('getPropertyEventsRows_whenSummaryMatchesLabelCaseInsensitively_doesNotDuplicateInParens', () => {
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Foo', 'FOO COLLECTION', '#111111')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u4', 'foo collection', '2026-11-08')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events.find(e => e.uid === 'u4').label).toBe('FOO COLLECTION');
   });
 
   test('getPropertyEventsRows_withNoBinTypeMatch_returnsRawSummaryAndUnmatched', () => {
