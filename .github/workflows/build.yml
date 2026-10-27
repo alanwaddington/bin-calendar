@@ -42,14 +42,6 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/bin-calendar:latest
             ghcr.io/${{ github.repository_owner }}/bin-calendar:${{ github.sha }}
 
-  deploy:
-    needs: build
-    runs-on: [self-hosted, nas]
-    if: github.event_name == 'push'
-    steps:
-      - name: Pull latest image and restart on the NAS
-        run: |
-          cd /volume1/docker/bin-calendar
-          docker compose pull
-          docker compose up -d
-          docker image prune -f
+  # No deploy job: the NAS pulls the new image itself via Watchtower, which
+  # polls GHCR on a schedule rather than needing GitHub to dispatch a job to
+  # a self-hosted runner. See README's "Automated deployment (Watchtower)".
