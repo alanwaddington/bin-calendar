@@ -7,6 +7,25 @@
 
 ---
 
+## Findings Resolution (post-review)
+
+All findings were fixed, regardless of severity, per explicit user instruction. M1 required a product decision (feed-wins vs. keep-stutter) and was confirmed with the user before implementing — see note on M1 below.
+
+| Finding | Outcome | Commit |
+|---|---|---|
+| M1 | **Fixed** — user chose "feed wins": `formatMatchedLabel` now distinguishes equal / contained / unrelated instead of just equal / unrelated. `Trolley`/`Trolley+food` now renders `Trolley+food` | `a0800c1` |
+| M2 (dashboard dedup key) | **Fixed** — `/api/next-collection` now returns `rawLabel` (pre-formatting); `dashboard.js` de-dupes hero chips on it instead of the display string | `4df1b6e` |
+| M2 (next-collection fan-out join) | **Fixed** — extracted `BIN_TYPE_JOIN_SQL`, used by both `getPropertyEventsRows` and `/api/next-collection`; the two endpoints now agree on row count for multi-match events | `4df1b6e` |
+| m1 (test comment mismatch) | **Fixed** — comment now matches its data; added a real-DB test at the user's literal `Trolley`/`Trolley` config | `a0800c1` |
+| m2 (unbounded label length) | **Fixed** — `.hero-bin-chip` gets `max-width`/ellipsis, `.cal-marker-label` gets a 3-line clamp, both carry the full text via `title` (new `escCalAttr()` in calendar.js) | `4df1b6e` |
+| m3 (no issue of record) | **Fixed (documentation)** — CLAUDE.md now records an explicit exception for small ad-hoc `fix/*` bug-fix branches, with a caveat that `/pr-reviewer`'s self-derived criteria need more scrutiny, not less, in that case | `4df1b6e` |
+| S1 (sync.js/display label divergence) | No action — explicitly no recommendation for this PR | — |
+| S2 (`formatMatchedLabel` placement) | No action — explicitly no recommendation for this PR | — |
+
+Re-verified after fixes: 233/233 tests passing (was 222/222 — 11 new), 0 lint errors/warnings, 96.89% statement coverage (above the 80% threshold).
+
+---
+
 ## Summary
 
 | Item | Result |
