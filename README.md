@@ -101,30 +101,23 @@ cp .env.example .env
 
 6. Open `http://<nas-ip>:3000`
 
-### Automated deployment (self-hosted runner)
+### Automated deployment (Watchtower)
 
-Steps 1–6 above are the one-time initial setup. After that, merges to `main` deploy automatically via a GitHub Actions self-hosted runner installed **on the NAS itself** — no inbound ports opened, no SSH access from GitHub's cloud runners. The runner only makes outbound connections to GitHub (same as checking for software updates).
+Steps 1–6 above are the one-time initial setup. After that, **Watchtower** — a small container running on the NAS itself — periodically checks GHCR for a new `bin-calendar:latest` image and auto-restarts the container when one appears. No inbound ports opened, no GitHub Actions job-dispatch required (see below for why that matters here).
+
+> **Note on history:** this project originally tried a GitHub Actions self-hosted runner for this (a `deploy` job dispatched straight from the `build` job). That approach was abandoned — after extensive troubleshooting (confirmed clean runner registration, correct labels, reachable endpoints, no errors anywhere in the runner's own logs) jobs still wouldn't dispatch to it, pointing to a GitHub-platform-side scheduling issue for this specific runner/account that wasn't fixable from the NAS side. Watchtower sidesteps the whole problem since it only needs simple periodic outbound polling, not a sustained job-dispatch connection.
 
 #### A. Get a terminal on the NAS
 
 1. DSM → **Control Panel → Terminal & SNMP → Enable SSH service** (if not already on). Note the port (default `22`).
 2. From your Windows machine: `ssh <your-dsm-username>@<nas-ip> -p 22`
-3. **On Synology, plan to prefix every `docker`/`docker compose` command below with `sudo`.** DSM's regular SSH users don't have direct access to the Docker socket by default (confirmed: a bare `docker login` fails with `permission denied while trying to connect to the Docker daemon socket`). The commands below show the `sudo` form directly rather than as an aside.
+3. **On Synology, prefix every `docker`/`docker compose` command below with `sudo`.** DSM's regular SSH users don't have direct access to the Docker socket by default (confirmed: a bare `docker login` fails with `permission denied while trying to connect to the Docker daemon socket`).
 
-#### B. Create one GitHub token for both GHCR pull and runner registration
-
-Rather than two separate tokens, one classic PAT with both scopes covers everything below:
-
-1. On GitHub (in a browser, not the NAS): **https://github.com/settings/tokens → Generate new token (classic)**
-2. Name it something like `bin-calendar-nas`, set an expiration you're comfortable with
-3. Select scopes: **`repo`** (needed for the runner to register itself) and **`read:packages`** (needed to pull from GHCR if the package is private)
-4. Generate, then **copy the token immediately** — GitHub only shows it once. Paste it somewhere temporarily (you'll use it twice, in steps C and D below) and delete that note once both are done.
-
-#### C. Authenticate Docker on the NAS (skip if the GHCR package is public)
+#### B. Authenticate Docker on the NAS (skip if the GHCR package is public)
 
 ```bash
 sudo docker login ghcr.io -u alanwaddington
-# password: paste the token from step B
+# password: a GitHub PAT (classic) with read:packages scope — https://github.com/settings/tokens
 ```
 
 Confirm it worked:
@@ -132,44 +125,40 @@ Confirm it worked:
 sudo docker pull ghcr.io/alanwaddington/bin-calendar:latest
 ```
 
-#### D. Launch the runner container
+#### C. Launch Watchtower, scoped to just this one container
 
 ```bash
-mkdir -p /volume1/docker/gh-runner
-sudo docker run -d --name gh-runner --restart unless-stopped \
-  -v /volume1/docker/gh-runner:/home/runner \
-  -v /volume1/docker/bin-calendar:/volume1/docker/bin-calendar \
+sudo docker run -d --name watchtower --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e REPO_URL=https://github.com/alanwaddington/bin-calendar \
-  -e ACCESS_TOKEN=<token-from-step-B> \
-  -e RUNNER_NAME=nas \
-  -e RUNNER_SCOPE=repo \
-  -e LABELS=self-hosted,nas \
-  myoung34/github-runner:latest
+  -v /root/.docker/config.json:/config.json:ro \
+  containrrr/watchtower \
+  --interval 300 \
+  --cleanup \
+  bin-calendar
 ```
 
 What each part is doing:
-- `ACCESS_TOKEN` (not `RUNNER_TOKEN`) — the container uses this PAT to generate its own short-lived registration token internally, and does it again automatically if the container ever restarts. You never have to manually copy a 1-hour expiring token from GitHub's UI.
-- The second `-v` mount makes `/volume1/docker/bin-calendar` (where the NAS's own `docker-compose.yml` lives, from step 4 earlier) visible **at the identical path** inside the runner container — the `deploy` job's `cd /volume1/docker/bin-calendar` assumes that path exists wherever the job runs, so the path has to match on both sides of the mount.
-- The `docker.sock` mount lets the runner drive the **host's** Docker daemon directly, so `docker compose up -d` restarts the real `bin-calendar` container running on the NAS — not a nested container isolated inside the runner that would have no effect on anything.
-- `myoung34/github-runner` is a commonly used community image for exactly this pattern — review it yourself before trusting it with Docker socket access (that access is effectively root on the host), or build your own from [GitHub's official runner release](https://github.com/actions/runner/releases) if you'd rather not depend on a third party.
+- The trailing `bin-calendar` argument **restricts Watchtower to that one named container only** — important on a NAS running several other unrelated containers (Home Assistant, Portainer, a travel-wiki stack, etc.) that you don't want silently auto-updated too. Without naming a container, Watchtower watches *everything*.
+- `--interval 300` checks every 5 minutes; adjust as you like.
+- `--cleanup` removes the old image after a successful update, so layers don't accumulate on NAS storage over time.
+- The `config.json` mount reuses the GHCR login from step B (read-only) so Watchtower can pull if the package is private — this is why step B has to happen with `sudo` too (so the credentials land in `/root/.docker/config.json`, the path mounted here).
 
-#### E. Verify it registered
+#### D. Verify it's running
 
 ```bash
-sudo docker logs gh-runner
+sudo docker logs watchtower --tail 20
 ```
-Look for a line like `Listening for Jobs`. Then on GitHub: repo → **Settings → Actions → Runners** should show `nas` with a green **Idle** status. If it's missing:
-- `sudo docker logs gh-runner` will usually show why (bad token, network issue, etc.)
-- Re-check the PAT has the `repo` scope and hasn't expired
-- `sudo docker ps` to confirm the container is actually running, not restart-looping (`sudo docker ps -a` if it's not in the list at all)
-
-#### F. Test the whole pipeline end to end
-
-Push any trivial change to `main` (or merge a PR into it) and watch: repo → **Actions** tab → the workflow run should show `test` → `build` → `deploy` all green, with `deploy` showing `nas` as the runner it executed on. Then confirm on the NAS itself:
+You should see it start up and log its first scan. Then confirm it's actually polling on schedule:
 ```bash
-sudo docker ps   # bin-calendar's "CREATED" time should be recent
-sudo docker compose -f /volume1/docker/bin-calendar/docker-compose.yml logs --tail 20 bin-calendar
+sudo docker logs watchtower --tail 5 --since 10m
+```
+
+#### E. Test it end to end
+
+Push any trivial change to `main` (or merge a PR into it) so a new image gets built and published to GHCR. Within one `--interval` period (5 minutes by default), Watchtower should detect the new digest and restart `bin-calendar`:
+```bash
+sudo docker ps   # bin-calendar's "CREATED"/"STATUS" should show a recent restart
+sudo docker logs watchtower --tail 20   # should show it found and applied an update
 ```
 
 #### Troubleshooting
@@ -177,13 +166,18 @@ sudo docker compose -f /volume1/docker/bin-calendar/docker-compose.yml logs --ta
 | Symptom | Likely cause |
 |---|---|
 | Bare `docker` command fails with `permission denied ... docker daemon socket` | Normal on Synology — prefix the command with `sudo` |
-| `deploy` job stays queued forever in the Actions tab | Runner isn't registered, or is offline — check `sudo docker ps` and `sudo docker logs gh-runner` on the NAS |
-| Runner shows **Offline** on GitHub | Container isn't running (`sudo docker ps -a`) or lost network — `sudo docker start gh-runner` |
-| `deploy` step fails on `docker compose pull` with `unauthorized` | GHCR login (step C) wasn't done, or the PAT lacks `read:packages` and/or has expired |
-| `deploy` step fails with `no such file or directory` on the `cd` | The two paths in the `-v` mount (step D) don't match — both sides must be `/volume1/docker/bin-calendar` |
-| Runner re-registers as a *new* runner every restart instead of reconnecting | Using `RUNNER_TOKEN` instead of `ACCESS_TOKEN` — switch to `ACCESS_TOKEN` as shown above |
+| Watchtower logs `unauthorized` or `401` trying to pull | GHCR login (step B) wasn't done as `sudo`, so the mounted `/root/.docker/config.json` doesn't have the credentials, or the PAT lacks `read:packages`/has expired |
+| Watchtower updates *other* containers you didn't expect | The container-name argument was left off `docker run` — it must end with `bin-calendar` to scope it |
+| `bin-calendar` doesn't restart after a new image is confirmed in GHCR | Check `sudo docker logs watchtower` for the actual error; confirm the container name really is `bin-calendar` (`sudo docker ps`) |
 
-From here, every merge to `main` runs test → build → deploy automatically, and `docker image prune -f` in the deploy step keeps old image layers from accumulating on the NAS's storage over time.
+#### Cleaning up the abandoned self-hosted-runner attempt
+
+If you went through the earlier self-hosted runner setup before this section was rewritten, remove the now-unused pieces:
+```bash
+sudo docker rm -f gh-runner
+rm -rf /volume1/docker/gh-runner
+```
+The runner's GitHub-side registration has already been removed via the API as part of this troubleshooting session — **Settings → Actions → Runners** should show none listed.
 
 ## Development
 
@@ -230,18 +224,19 @@ tests/
 
 ## CI/CD
 
-GitHub Actions builds and pushes the Docker image to GHCR on every push to `main`, then deploys it to the NAS. Tests must pass before the image is built.
+GitHub Actions builds and pushes the Docker image to GHCR on every push to `main`. Tests must pass before the image is built. Getting that new image running on the NAS is then handled separately, by Watchtower polling GHCR directly — see "Automated deployment (Watchtower)" above.
 
 ```
 push to main
   └─ test job (npm ci && npm test)                [GitHub-hosted runner]
        └─ build job (Docker build & push to ghcr.io)   [GitHub-hosted runner]
-            └─ deploy job (docker compose pull && up -d)  [self-hosted runner, on the NAS]
+
+(separately, on the NAS, on its own schedule)
+Watchtower polls GHCR every 5 min
+  └─ new digest found → docker compose pull && up -d (bin-calendar only)
 ```
 
-Pull requests also run the test job (no Docker build, no deploy).
-
-The `deploy` job runs on a **self-hosted runner installed directly on the NAS** — see "Automated deployment" below for setup. This means deploys happen with no inbound ports opened on the NAS/router: the runner polls GitHub outbound only, same as any other outgoing connection.
+Pull requests also run the test job (no Docker build).
 
 ## API
 
