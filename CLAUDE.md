@@ -93,7 +93,7 @@ Follow the `/analyse` → `/design` → `/develop` → `/pr-reviewer` → `/merg
 - Deploy is automatic: Watchtower, a container running on the NAS itself, polls GHCR every 5 minutes and runs `docker compose pull && up -d` for just the `bin-calendar` container when a new image appears — no inbound ports opened, no manual pull needed, no GitHub Actions deploy job involved (a self-hosted-runner approach was tried first and abandoned after the platform wouldn't dispatch jobs to it). See the README's "Automated deployment (Watchtower)" section for setup/troubleshooting.
 - Data volume: `/volume1/docker/bin-calendar/data` → `/app/data`
 - Database file: `/app/data/bin-calendar.db`
-- CI/CD: tests must pass before image is built; the image only ships to the NAS if `test` → `build` → `deploy` all succeed
+- CI/CD: tests must pass before image is built; `test` → `build` publish to GHCR, then Watchtower (not a GitHub Actions job) is what actually gets it onto the NAS
 
 ## GitHub Project
 
