@@ -79,6 +79,34 @@ app.get('/api/properties/:id/credential-status', async (req, res) => {
   }
 });
 
+app.get('/api/properties/:id/events', (req, res) => {
+  const property = getDb().prepare('SELECT id FROM properties WHERE id = ?').get(req.params.id);
+  if (!property) return res.status(404).json({ error: 'Property not found' });
+
+  const rows = getDb().prepare(`
+    SELECT e.uid, e.start_date AS date, e.summary, bt.label, bt.colour
+    FROM events e
+    LEFT JOIN bin_types bt ON bt.id = (
+      SELECT b2.id FROM bin_types b2
+      WHERE e.summary LIKE '%' || b2.summary_match || '%'
+      ORDER BY b2.id LIMIT 1
+    )
+    WHERE e.property_id = ?
+    ORDER BY e.start_date ASC, e.uid ASC
+  `).all(req.params.id);
+
+  const events = rows.map(r => ({
+    uid: r.uid,
+    date: r.date,
+    summary: r.summary,
+    label: r.label || r.summary,
+    colour: r.colour || '#6b7a99',
+    matched: r.label != null,
+  }));
+
+  res.json({ events });
+});
+
 // ── Google OAuth ───────────────────────────────────────────────────────────
 // Returns the Google auth URL for a property (Desktop app OAuth — user pastes callback URL back)
 app.get('/api/google/auth-url/:propertyId', (req, res) => {
