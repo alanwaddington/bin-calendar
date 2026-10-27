@@ -25,7 +25,7 @@ ENCRYPTION_KEY=$(openssl rand -hex 32) node src/server.js
 - **`src/db.js`** — SQLite setup, migrations, connection singleton
 - **`src/crypto.js`** — AES-256-GCM credential encryption
 - **`src/migrations/`** — Sequential SQL migrations (001.sql, 002.sql, …)
-- **`public/`** — Vanilla JS SPA (index.html, style.css, app.js, dashboard.js, properties.js, logs.js)
+- **`public/`** — Vanilla JS SPA (index.html, style.css, app.js, dashboard.js, calendar.js, properties.js, logs.js)
 
 ## Testing
 
@@ -61,7 +61,7 @@ Follow the `/analyse` → `/design` → `/develop` → `/pr-reviewer` → `/merg
 **Any task that touches HTML templates, CSS, JavaScript interactions, layouts, or any visual component requires the `/product-designer` skill. This is mandatory — do not write frontend code without invoking it first.**
 
 - Frontend is vanilla JS only — no frameworks, no build step
-- Files: `public/style.css`, `public/index.html`, `public/app.js`, `public/dashboard.js`, `public/properties.js`, `public/logs.js`
+- Files: `public/style.css`, `public/index.html`, `public/app.js`, `public/dashboard.js`, `public/calendar.js`, `public/properties.js`, `public/logs.js`
 - XSS escaping is **always** required:
   - `escHtml()` for all user data in HTML content
   - `escAttr()` for all user data in HTML attributes

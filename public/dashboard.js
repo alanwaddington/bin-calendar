@@ -199,8 +199,8 @@ async function syncNow() {
 }
 
 function navigateToProperty(propertyId) {
-  window._settingsTargetPropertyId = propertyId;
-  navigate('settings');
+  window._calendarTargetPropertyId = propertyId;
+  navigate('calendar');
 }
 
 function escHtml(str) {

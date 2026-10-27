@@ -435,6 +435,99 @@ describe('server API', () => {
     expect(res.status).toBe(400);
   });
 
+  // --- GET /api/properties/:id/events ---
+
+  test('getPropertyEvents_withEvents_returns200WithOrderedEvents', async () => {
+    mockPrepare.get.mockReturnValueOnce({ id: 1 });
+    mockPrepare.all.mockReturnValueOnce([
+      { uid: 'uid-1', date: '2026-11-03', summary: 'Trolley+food', label: 'General Waste', colour: '#6b7280' },
+      { uid: 'uid-2', date: '2026-11-10', summary: 'Trolley+food', label: 'General Waste', colour: '#6b7280' },
+    ]);
+
+    const res = await request(app).get('/api/properties/1/events');
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toEqual([
+      { uid: 'uid-1', date: '2026-11-03', summary: 'Trolley+food', label: 'General Waste', colour: '#6b7280', matched: true },
+      { uid: 'uid-2', date: '2026-11-10', summary: 'Trolley+food', label: 'General Waste', colour: '#6b7280', matched: true },
+    ]);
+
+    const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
+    expect(eventsSql).toMatch(/ORDER BY e\.start_date ASC/i);
+  });
+
+  test('getPropertyEvents_withUnknownId_returns404', async () => {
+    mockPrepare.get.mockReturnValueOnce(null);
+
+    const res = await request(app).get('/api/properties/999/events');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+  });
+
+  test('getPropertyEvents_withDbError_returns500WithJsonError', async () => {
+    mockPrepare.get.mockReturnValueOnce({ id: 1 });
+    mockPrepare.all.mockImplementationOnce(() => {
+      throw new Error('database is locked');
+    });
+
+    const res = await request(app).get('/api/properties/1/events');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('database is locked');
+  });
+
+  test('getPropertyEvents_withNoEvents_returnsEmptyArray', async () => {
+    mockPrepare.get.mockReturnValueOnce({ id: 1 });
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    const res = await request(app).get('/api/properties/1/events');
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toEqual([]);
+  });
+
+  test('getPropertyEvents_withMultipleBinTypeMatches_returnsSingleMarkerPerEvent', async () => {
+    mockPrepare.get.mockReturnValueOnce({ id: 1 });
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        uid: 'uid-general',
+        date: '2026-11-12',
+        summary: 'General waste+food (+food only after transition week)',
+        label: 'General Waste',
+        colour: '#6b7280',
+      },
+    ]);
+
+    const res = await request(app).get('/api/properties/1/events');
+
+    expect(res.status).toBe(200);
+    expect(res.body.events).toHaveLength(1);
+    expect(res.body.events[0].label).toBe('General Waste');
+
+    const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
+    expect(eventsSql).toMatch(/LIMIT 1/i);
+  });
+
+  test('getPropertyEvents_withNoBinTypeMatch_returnsRawSummaryAndNeutralColour', async () => {
+    mockPrepare.get.mockReturnValueOnce({ id: 1 });
+    mockPrepare.all.mockReturnValueOnce([
+      { uid: 'uid-transition', date: '2026-11-23', summary: 'Transition week', label: null, colour: null },
+    ]);
+
+    const res = await request(app).get('/api/properties/1/events');
+
+    expect(res.status).toBe(200);
+    expect(res.body.events[0]).toEqual({
+      uid: 'uid-transition',
+      date: '2026-11-23',
+      summary: 'Transition week',
+      label: 'Transition week',
+      colour: '#6b7a99',
+      matched: false,
+    });
+  });
+
   test('POST /api/google/complete with valid code resets credential_status to ok', async () => {
     const state = Buffer.from(JSON.stringify({ property_id: 1, nonce: 'abc' })).toString('base64url');
     const pastedUrl = `http://localhost:3000/callback?state=${state}&code=test-code`;

@@ -9,6 +9,7 @@ A self-hosted Docker application that fetches bin collection schedules from East
 - Multiple properties supported — each syncs independently
 - Configurable sync schedule via a custom cron expression (default: 1st of each month)
 - Manual sync via the web UI
+- Per-property calendar view — month grid (desktop) / agenda list (mobile) of synced collection dates, with month navigation and a property switcher
 - Sync history and per-property logs
 - Credentials encrypted at rest (AES-256-GCM)
 
@@ -206,14 +207,21 @@ Tests run with coverage. The 80% threshold is enforced — the build fails if co
 ```
 tests/
 ├── helpers/
-│   └── testDb.js           # In-memory SQLite factory
+│   ├── testDb.js              # In-memory SQLite factory + real migrations
+│   └── browserDom.js          # jsdom window loading the real public/*.js files
 ├── fixtures/
-│   └── ics-samples.js      # ICS text samples for parsing tests
+│   └── ics-samples.js         # ICS text samples for parsing tests
 ├── unit/
 │   ├── crypto.test.js
 │   ├── ics.test.js
 │   ├── scheduler.test.js
-│   └── db.test.js
+│   ├── db.test.js
+│   ├── credential-check.test.js
+│   ├── google-credentials.test.js
+│   ├── icloud-credentials.test.js
+│   ├── sync-cache.test.js
+│   ├── calendar-events.test.js    # GET /api/properties/:id/events against a real DB
+│   └── calendar-frontend.test.js  # public/calendar.js via browserDom.js
 ├── integration/
 │   ├── sync.test.js
 │   ├── google.test.js
@@ -246,8 +254,9 @@ Pull requests also run the test job (no Docker build).
 | GET | `/api/config` | Feature flags (Google configured, address lookup configured) |
 | GET | `/api/properties` | List all properties |
 | POST | `/api/properties` | Create a property |
-| PUT | `/api/properties/:id` | Update label and UPRN |
+| PUT | `/api/properties/:id` | Update label and ICS calendar URL |
 | DELETE | `/api/properties/:id` | Delete a property |
+| GET | `/api/properties/:id/events` | Cached collection events for a property (calendar view) |
 | GET | `/api/google/auth-url/:propertyId` | Start Google OAuth flow |
 | POST | `/api/google/complete` | Complete Google OAuth (paste callback URL) |
 | GET | `/api/google/calendars/:propertyId` | List Google calendars for a property |
