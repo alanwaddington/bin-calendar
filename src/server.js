@@ -252,20 +252,34 @@ function sanitiseBinTypeInput(body) {
 app.post('/api/bin-types', (req, res) => {
   const input = sanitiseBinTypeInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
-  const result = getDb().prepare(
-    'INSERT INTO bin_types (summary_match, label, colour) VALUES (?, ?, ?)'
-  ).run(input.summary_match, input.label, input.colour);
-  res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour });
+  try {
+    const result = getDb().prepare(
+      'INSERT INTO bin_types (summary_match, label, colour) VALUES (?, ?, ?)'
+    ).run(input.summary_match, input.label, input.colour);
+    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour });
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'A bin type with that match text already exists' });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.put('/api/bin-types/:id', (req, res) => {
   const input = sanitiseBinTypeInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
-  const result = getDb().prepare(
-    'UPDATE bin_types SET summary_match = ?, label = ?, colour = ? WHERE id = ?'
-  ).run(input.summary_match, input.label, input.colour, req.params.id);
-  if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
-  res.json({ ok: true });
+  try {
+    const result = getDb().prepare(
+      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ? WHERE id = ?'
+    ).run(input.summary_match, input.label, input.colour, req.params.id);
+    if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'A bin type with that match text already exists' });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/bin-types/:id', (req, res) => {

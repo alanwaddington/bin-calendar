@@ -41,3 +41,15 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/bin-calendar:latest
             ghcr.io/${{ github.repository_owner }}/bin-calendar:${{ github.sha }}
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, nas]
+    if: github.event_name == 'push'
+    steps:
+      - name: Pull latest image and restart on the NAS
+        run: |
+          cd /volume1/docker/bin-calendar
+          docker compose pull
+          docker compose up -d
+          docker image prune -f
