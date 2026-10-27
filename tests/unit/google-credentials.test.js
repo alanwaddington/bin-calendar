@@ -28,7 +28,7 @@ jest.mock('../../src/db', () => ({
 }));
 
 const { google } = require('googleapis');
-const { decryptJson, encryptJson } = require('../../src/crypto');
+const { decryptJson } = require('../../src/crypto');
 const { getDb } = require('../../src/db');
 const { checkCredentials } = require('../../src/google');
 

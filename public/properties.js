@@ -136,8 +136,8 @@ async function renderSyncSchedule() {
   const el = document.getElementById('sync-schedule-section');
   if (!el) return;
 
-  let cronExpression = '0 0 1 * *';
-  let nextSync = '';
+  let cronExpression;
+  let nextSync;
 
   try {
     const data = await api('GET', '/api/settings/sync-schedule');

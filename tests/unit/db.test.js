@@ -19,7 +19,9 @@ describe('db', () => {
     // Clean up
     try {
       fs.rmSync(tmpDir, { recursive: true });
-    } catch {}
+    } catch {
+      // ignore - best-effort cleanup of a temp dir, not worth failing the test over
+    }
     delete process.env.DB_PATH;
   });
 
@@ -64,7 +66,7 @@ describe('db', () => {
 
   test('initDb_skipsAlreadyAppliedMigrations', () => {
     const { initDb } = require('../../src/db');
-    const db = initDb();
+    initDb();
 
     // Calling initDb again should not fail (migrations already applied)
     jest.resetModules();
