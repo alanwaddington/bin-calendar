@@ -607,6 +607,21 @@ describe('server API', () => {
     expect(res.body.summary_match).toBe('Grey');
   });
 
+  test('postBinType_withDuplicateSummaryMatch_returns409WithJsonError', async () => {
+    mockPrepare.run.mockImplementationOnce(() => {
+      throw Object.assign(new Error('UNIQUE constraint failed: bin_types.summary_match'), {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+      });
+    });
+
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already exists/i);
+  });
+
   // --- PUT /api/bin-types/:id ---
 
   test('putBinType_withValidData_returns200', async () => {
@@ -655,6 +670,21 @@ describe('server API', () => {
       .send({ summary_match: '_Grey%', label: 'General Waste', colour: '#6b7280' });
 
     expect(res.status).toBe(200);
+  });
+
+  test('putBinType_withDuplicateSummaryMatch_returns409WithJsonError', async () => {
+    mockPrepare.run.mockImplementationOnce(() => {
+      throw Object.assign(new Error('UNIQUE constraint failed: bin_types.summary_match'), {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+      });
+    });
+
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already exists/i);
   });
 
   // --- DELETE /api/bin-types/:id ---
