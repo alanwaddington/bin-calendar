@@ -79,15 +79,45 @@ app.get('/api/properties/:id/credential-status', async (req, res) => {
   }
 });
 
+// A bin_types rule's label can relate to the raw ICS summary it matched in
+// three different ways, and each needs different treatment to never lose
+// or fabricate information:
+//   - label === summary (case/whitespace-insensitive): show the label in
+//     its configured casing, e.g. "FOO COLLECTION" not "foo collection".
+//   - summary contains the label: the feed is strictly more specific than
+//     the label (e.g. "Trolley" matches "Trolley+food"), so show the feed
+//     text alone rather than stuttering "Trolley (Trolley+food)". This
+//     also covers case-insensitive duplicates like "Garden Waste" matching
+//     "Garden waste" - containment, not splicing, so it can never produce
+//     "Garden Waste waste".
+//   - otherwise: label and summary say different things, so show both -
+//     "General Waste (Trolley+food)" - never discard the raw summary by
+//     assuming the label already covers it.
+function formatMatchedLabel(label, summary) {
+  const normalisedLabel = label.trim().toLowerCase();
+  const trimmedSummary = summary.trim();
+  const normalisedSummary = trimmedSummary.toLowerCase();
+  if (normalisedSummary === normalisedLabel) return label;
+  if (normalisedSummary.includes(normalisedLabel)) return trimmedSummary;
+  return `${label} (${summary})`;
+}
+
+// A plain `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match
+// || '%'` fans out to one row per matching rule when an event's summary
+// matches more than one bin type - this correlated subquery collapses that
+// to a single match (lowest id wins) instead, so every endpoint that joins
+// events to bin_types agrees on how many rows one event produces.
+const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON bt.id = (
+      SELECT b2.id FROM bin_types b2
+      WHERE e.summary LIKE '%' || b2.summary_match || '%'
+      ORDER BY b2.id LIMIT 1
+    )`;
+
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
     SELECT e.uid, e.start_date AS date, e.summary, bt.label, bt.colour
     FROM events e
-    LEFT JOIN bin_types bt ON bt.id = (
-      SELECT b2.id FROM bin_types b2
-      WHERE e.summary LIKE '%' || b2.summary_match || '%'
-      ORDER BY b2.id LIMIT 1
-    )
+    ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
     ORDER BY e.start_date ASC, e.uid ASC
   `).all(propertyId);
@@ -96,7 +126,7 @@ function getPropertyEventsRows(db, propertyId) {
     uid: r.uid,
     date: r.date,
     summary: r.summary,
-    label: r.label || r.summary,
+    label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
     colour: r.colour || '#6b7a99',
     matched: r.label != null,
   }));
@@ -250,7 +280,7 @@ app.get('/api/next-collection', (req, res) => {
       p.label             AS property_label
     FROM events e
     JOIN properties p ON p.id = e.property_id
-    LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'
+    ${BIN_TYPE_JOIN_SQL}
     WHERE e.start_date >= date('now')
     ORDER BY e.start_date ASC
   `).all();
@@ -261,7 +291,11 @@ app.get('/api/next-collection', (req, res) => {
       date: r.date,
       daysUntil: r.days_until,
       summary: r.summary,
-      label: r.label || r.summary,
+      label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
+      // The pre-formatting value (bare bin_types.label, or the summary when
+      // unmatched) - a stable key for de-duplicating across properties,
+      // since `label` above can now embed a property-specific raw summary.
+      rawLabel: r.label || r.summary,
       colour: r.colour || '#6b7a99',
       propertyId: r.property_id,
       propertyLabel: r.property_label,
@@ -363,4 +397,4 @@ if (require.main === module) {
   app.listen(PORT, () => console.log(`bin-calendar running on port ${PORT}`));
 }
 
-module.exports = { app, getPropertyEventsRows };
+module.exports = { app, getPropertyEventsRows, formatMatchedLabel };

@@ -186,6 +186,32 @@ describe('calendar.js rendering and state', () => {
     expect((gridHtml.match(/cal-marker-dot/g) || [])).toHaveLength(2);
   });
 
+  // PR #27 review finding m2: a matched label can now be considerably
+  // longer than a plain configured label (feed summary appended, or shown
+  // alone). CSS visually clamps it, but the full text must stay in the DOM
+  // (for de-dup logic elsewhere and screen readers) and be recoverable via
+  // title when clamped.
+  test('renderCalendarMarker_longLabel_keepsFullTextInDomAndExposesItViaTitle', async () => {
+    const now = new Date();
+    const y = now.getFullYear(), m0 = now.getMonth();
+    const pad = n => String(n).padStart(2, '0');
+    const longLabel = 'General waste+food (+food only after transition week, please check the council website for exact dates)';
+
+    const window = createCalendarWindow(mockFetch([
+      ['/api/properties', [{ id: 1, label: 'Home' }]],
+      [/\/api\/properties\/1\/events/, { events: [
+        { uid: 'u1', date: `${y}-${pad(m0 + 1)}-05`, summary: longLabel, label: longLabel, colour: '#6b7280', matched: true },
+      ] }],
+    ]));
+
+    await window.loadCalendar();
+
+    const marker = window.document.querySelector('.cal-marker-label');
+    expect(marker).not.toBeNull();
+    expect(marker.textContent).toBe(longLabel);
+    expect(marker.getAttribute('title')).toBe(longLabel);
+  });
+
   test('renderCalendarMarker_withInvalidColourFromApi_fallsBackToNeutralRatherThanInjecting', async () => {
     const now = new Date();
     const y = now.getFullYear(), m0 = now.getMonth();

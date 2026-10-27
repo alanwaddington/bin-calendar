@@ -66,11 +66,15 @@ function renderHeroCard(data) {
     : days === 1 ? 'Tomorrow'
     : `${days} days away`;
 
-  // De-duplicate bins by label (multiple properties may share the same bin type)
+  // De-duplicate bins by rawLabel - the pre-formatting bin type label (or
+  // summary, if unmatched) - not the display `label`. Multiple properties
+  // may share the same bin type but have differently-worded feed summaries,
+  // which formatMatchedLabel can turn into different display strings for
+  // what is really one bin type.
   const seenLabels = new Set();
   const uniqueBins = collections.filter(c => {
-    if (seenLabels.has(c.label)) return false;
-    seenLabels.add(c.label);
+    if (seenLabels.has(c.rawLabel)) return false;
+    seenLabels.add(c.rawLabel);
     return true;
   });
 
@@ -84,7 +88,7 @@ function renderHeroCard(data) {
     <div class="hero-days">${escHtml(daysText)}</div>
     <div class="hero-bins">
       ${uniqueBins.map(bin =>
-        `<div class="hero-bin-chip" style="color:${escAttr(bin.colour)}">${escHtml(bin.label)}</div>`
+        `<div class="hero-bin-chip" style="color:${escAttr(bin.colour)}" title="${escAttr(bin.label)}">${escHtml(bin.label)}</div>`
       ).join('')}
     </div>
     <div class="hero-property">${propertyText}</div>`;
