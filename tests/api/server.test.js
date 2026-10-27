@@ -503,7 +503,7 @@ describe('server API', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(1);
-    expect(res.body.events[0].label).toBe('General Waste (General waste+food (+food only after transition week))');
+    expect(res.body.events[0].label).toBe('General waste+food (+food only after transition week)');
 
     const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
     expect(eventsSql).toMatch(/LIMIT 1/i);

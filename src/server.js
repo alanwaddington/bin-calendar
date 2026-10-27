@@ -79,16 +79,26 @@ app.get('/api/properties/:id/credential-status', async (req, res) => {
   }
 });
 
-// A bin_types rule's label replaces the whole raw ICS summary when matched,
-// which silently drops any extra qualifier the council's feed adds (e.g.
-// "Trolley+food" matching a "Trolley" rule labelled "General Waste" loses
-// the "+food" part entirely). Appending the raw summary in parens preserves
-// it without trying to algorithmically splice fragments together - that
-// approach can go wrong for case-insensitive duplicates (e.g. "Garden
-// waste" matching a "Garden Waste" label) and for transitional one-off
-// summaries with parenthetical caveats.
+// A bin_types rule's label can relate to the raw ICS summary it matched in
+// three different ways, and each needs different treatment to never lose
+// or fabricate information:
+//   - label === summary (case/whitespace-insensitive): show the label in
+//     its configured casing, e.g. "FOO COLLECTION" not "foo collection".
+//   - summary contains the label: the feed is strictly more specific than
+//     the label (e.g. "Trolley" matches "Trolley+food"), so show the feed
+//     text alone rather than stuttering "Trolley (Trolley+food)". This
+//     also covers case-insensitive duplicates like "Garden Waste" matching
+//     "Garden waste" - containment, not splicing, so it can never produce
+//     "Garden Waste waste".
+//   - otherwise: label and summary say different things, so show both -
+//     "General Waste (Trolley+food)" - never discard the raw summary by
+//     assuming the label already covers it.
 function formatMatchedLabel(label, summary) {
-  if (label.trim().toLowerCase() === summary.trim().toLowerCase()) return label;
+  const normalisedLabel = label.trim().toLowerCase();
+  const trimmedSummary = summary.trim();
+  const normalisedSummary = trimmedSummary.toLowerCase();
+  if (normalisedSummary === normalisedLabel) return label;
+  if (normalisedSummary.includes(normalisedLabel)) return trimmedSummary;
   return `${label} (${summary})`;
 }
 
