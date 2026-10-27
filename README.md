@@ -165,7 +165,7 @@ Pull requests also run the test job (no Docker build).
 | GET | `/api/config` | Feature flags (Google configured, address lookup configured) |
 | GET | `/api/properties` | List all properties |
 | POST | `/api/properties` | Create a property |
-| PUT | `/api/properties/:id` | Update label and UPRN |
+| PUT | `/api/properties/:id` | Update label and ICS calendar URL |
 | DELETE | `/api/properties/:id` | Delete a property |
 | GET | `/api/properties/:id/events` | Cached collection events for a property (calendar view) |
 | GET | `/api/google/auth-url/:propertyId` | Start Google OAuth flow |
