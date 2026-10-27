@@ -44,7 +44,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: self-hosted
+    runs-on: [self-hosted, nas]
     if: github.event_name == 'push'
     steps:
       - name: Pull latest image and restart on the NAS

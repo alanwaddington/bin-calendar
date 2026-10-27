@@ -105,33 +105,82 @@ cp .env.example .env
 
 Steps 1–6 above are the one-time initial setup. After that, merges to `main` deploy automatically via a GitHub Actions self-hosted runner installed **on the NAS itself** — no inbound ports opened, no SSH access from GitHub's cloud runners. The runner only makes outbound connections to GitHub (same as checking for software updates).
 
-**One-time setup, on the NAS:**
+#### A. Get a terminal on the NAS
 
-1. If the GHCR package is private, authenticate Docker on the NAS once (skip if the package is public):
-   ```bash
-   docker login ghcr.io -u alanwaddington
-   # password: a GitHub PAT with read:packages scope
-   ```
+1. DSM → **Control Panel → Terminal & SNMP → Enable SSH service** (if not already on). Note the port (default `22`).
+2. From your Windows machine: `ssh <your-dsm-username>@<nas-ip> -p 22`
+3. Docker commands on DSM sometimes need `sudo` unless your user is in the `docker` group — if you already run `docker compose up -d` for bin-calendar without `sudo`, you're fine; otherwise prefix the `docker` commands below with `sudo`.
 
-2. Get a registration command from GitHub: repo → **Settings → Actions → Runners → New self-hosted runner**, choose **Linux**. GitHub shows a `config.sh --url ... --token ...` command with a token valid for ~1 hour — copy it for the next step rather than running it directly (the NAS runs everything in Docker, including this).
+#### B. Create one GitHub token for both GHCR pull and runner registration
 
-3. Run the runner as a container (keeps it isolated from DSM, matches how bin-calendar itself already runs):
-   ```bash
-   mkdir -p /volume1/docker/gh-runner
-   docker run -d --name gh-runner --restart unless-stopped \
-     -v /volume1/docker/gh-runner:/home/runner \
-     -v /volume1/docker/bin-calendar:/volume1/docker/bin-calendar \
-     -v /var/run/docker.sock:/var/run/docker.sock \
-     -e REPO_URL=https://github.com/alanwaddington/bin-calendar \
-     -e RUNNER_TOKEN=<token-from-step-2> \
-     -e RUNNER_NAME=nas \
-     myoung34/github-runner:latest
-   ```
-   The second volume mount makes `/volume1/docker/bin-calendar` (where the NAS's own `docker-compose.yml` lives) visible at the identical path inside the runner container, since the `deploy` job's `cd /volume1/docker/bin-calendar` assumes that path exists on whatever machine the job runs on. The Docker socket mount lets the runner drive the *host's* Docker daemon (so `docker compose up -d` restarts the real `bin-calendar` container, not a nested one inside the runner).
+Rather than two separate tokens, one classic PAT with both scopes covers everything below:
 
-   `myoung34/github-runner` is a commonly used community image for exactly this pattern — review it before trusting it with Docker socket access, or build your own from [GitHub's official runner release](https://github.com/actions/runner/releases) if you'd rather not depend on a third party.
+1. On GitHub (in a browser, not the NAS): **https://github.com/settings/tokens → Generate new token (classic)**
+2. Name it something like `bin-calendar-nas`, set an expiration you're comfortable with
+3. Select scopes: **`repo`** (needed for the runner to register itself) and **`read:packages`** (needed to pull from GHCR if the package is private)
+4. Generate, then **copy the token immediately** — GitHub only shows it once. Paste it somewhere temporarily (you'll use it twice, in steps C and D below) and delete that note once both are done.
 
-4. Confirm it registered: **Settings → Actions → Runners** should show `nas` as idle.
+#### C. Authenticate Docker on the NAS (skip if the GHCR package is public)
+
+```bash
+docker login ghcr.io -u alanwaddington
+# password: paste the token from step B
+```
+
+Confirm it worked:
+```bash
+docker pull ghcr.io/alanwaddington/bin-calendar:latest
+```
+
+#### D. Launch the runner container
+
+```bash
+mkdir -p /volume1/docker/gh-runner
+docker run -d --name gh-runner --restart unless-stopped \
+  -v /volume1/docker/gh-runner:/home/runner \
+  -v /volume1/docker/bin-calendar:/volume1/docker/bin-calendar \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e REPO_URL=https://github.com/alanwaddington/bin-calendar \
+  -e ACCESS_TOKEN=<token-from-step-B> \
+  -e RUNNER_NAME=nas \
+  -e RUNNER_SCOPE=repo \
+  -e LABELS=self-hosted,nas \
+  myoung34/github-runner:latest
+```
+
+What each part is doing:
+- `ACCESS_TOKEN` (not `RUNNER_TOKEN`) — the container uses this PAT to generate its own short-lived registration token internally, and does it again automatically if the container ever restarts. You never have to manually copy a 1-hour expiring token from GitHub's UI.
+- The second `-v` mount makes `/volume1/docker/bin-calendar` (where the NAS's own `docker-compose.yml` lives, from step 4 earlier) visible **at the identical path** inside the runner container — the `deploy` job's `cd /volume1/docker/bin-calendar` assumes that path exists wherever the job runs, so the path has to match on both sides of the mount.
+- The `docker.sock` mount lets the runner drive the **host's** Docker daemon directly, so `docker compose up -d` restarts the real `bin-calendar` container running on the NAS — not a nested container isolated inside the runner that would have no effect on anything.
+- `myoung34/github-runner` is a commonly used community image for exactly this pattern — review it yourself before trusting it with Docker socket access (that access is effectively root on the host), or build your own from [GitHub's official runner release](https://github.com/actions/runner/releases) if you'd rather not depend on a third party.
+
+#### E. Verify it registered
+
+```bash
+docker logs gh-runner
+```
+Look for a line like `Listening for Jobs`. Then on GitHub: repo → **Settings → Actions → Runners** should show `nas` with a green **Idle** status. If it's missing:
+- `docker logs gh-runner` will usually show why (bad token, network issue, etc.)
+- Re-check the PAT has the `repo` scope and hasn't expired
+- `docker ps` to confirm the container is actually running, not restart-looping (`docker ps -a` if it's not in the list at all)
+
+#### F. Test the whole pipeline end to end
+
+Push any trivial change to `main` (or merge a PR into it) and watch: repo → **Actions** tab → the workflow run should show `test` → `build` → `deploy` all green, with `deploy` showing `nas` as the runner it executed on. Then confirm on the NAS itself:
+```bash
+docker ps   # bin-calendar's "CREATED" time should be recent
+docker compose -f /volume1/docker/bin-calendar/docker-compose.yml logs --tail 20 bin-calendar
+```
+
+#### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `deploy` job stays queued forever in the Actions tab | Runner isn't registered, or is offline — check `docker ps` and `docker logs gh-runner` on the NAS |
+| Runner shows **Offline** on GitHub | Container isn't running (`docker ps -a`) or lost network — `docker start gh-runner` |
+| `deploy` step fails on `docker compose pull` with `unauthorized` | GHCR login (step C) wasn't done, or the PAT lacks `read:packages` and/or has expired |
+| `deploy` step fails with `no such file or directory` on the `cd` | The two paths in the `-v` mount (step D) don't match — both sides must be `/volume1/docker/bin-calendar` |
+| Runner re-registers as a *new* runner every restart instead of reconnecting | Using `RUNNER_TOKEN` instead of `ACCESS_TOKEN` — switch to `ACCESS_TOKEN` as shown above |
 
 From here, every merge to `main` runs test → build → deploy automatically, and `docker image prune -f` in the deploy step keeps old image layers from accumulating on the NAS's storage over time.
 
