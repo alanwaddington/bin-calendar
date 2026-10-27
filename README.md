@@ -101,6 +101,40 @@ cp .env.example .env
 
 6. Open `http://<nas-ip>:3000`
 
+### Automated deployment (self-hosted runner)
+
+Steps 1–6 above are the one-time initial setup. After that, merges to `main` deploy automatically via a GitHub Actions self-hosted runner installed **on the NAS itself** — no inbound ports opened, no SSH access from GitHub's cloud runners. The runner only makes outbound connections to GitHub (same as checking for software updates).
+
+**One-time setup, on the NAS:**
+
+1. If the GHCR package is private, authenticate Docker on the NAS once (skip if the package is public):
+   ```bash
+   docker login ghcr.io -u alanwaddington
+   # password: a GitHub PAT with read:packages scope
+   ```
+
+2. Get a registration command from GitHub: repo → **Settings → Actions → Runners → New self-hosted runner**, choose **Linux**. GitHub shows a `config.sh --url ... --token ...` command with a token valid for ~1 hour — copy it for the next step rather than running it directly (the NAS runs everything in Docker, including this).
+
+3. Run the runner as a container (keeps it isolated from DSM, matches how bin-calendar itself already runs):
+   ```bash
+   mkdir -p /volume1/docker/gh-runner
+   docker run -d --name gh-runner --restart unless-stopped \
+     -v /volume1/docker/gh-runner:/home/runner \
+     -v /volume1/docker/bin-calendar:/volume1/docker/bin-calendar \
+     -v /var/run/docker.sock:/var/run/docker.sock \
+     -e REPO_URL=https://github.com/alanwaddington/bin-calendar \
+     -e RUNNER_TOKEN=<token-from-step-2> \
+     -e RUNNER_NAME=nas \
+     myoung34/github-runner:latest
+   ```
+   The second volume mount makes `/volume1/docker/bin-calendar` (where the NAS's own `docker-compose.yml` lives) visible at the identical path inside the runner container, since the `deploy` job's `cd /volume1/docker/bin-calendar` assumes that path exists on whatever machine the job runs on. The Docker socket mount lets the runner drive the *host's* Docker daemon (so `docker compose up -d` restarts the real `bin-calendar` container, not a nested one inside the runner).
+
+   `myoung34/github-runner` is a commonly used community image for exactly this pattern — review it before trusting it with Docker socket access, or build your own from [GitHub's official runner release](https://github.com/actions/runner/releases) if you'd rather not depend on a third party.
+
+4. Confirm it registered: **Settings → Actions → Runners** should show `nas` as idle.
+
+From here, every merge to `main` runs test → build → deploy automatically, and `docker image prune -f` in the deploy step keeps old image layers from accumulating on the NAS's storage over time.
+
 ## Development
 
 ### Install dependencies
@@ -146,15 +180,18 @@ tests/
 
 ## CI/CD
 
-GitHub Actions builds and pushes the Docker image to GHCR on every push to `main`. Tests must pass before the image is built.
+GitHub Actions builds and pushes the Docker image to GHCR on every push to `main`, then deploys it to the NAS. Tests must pass before the image is built.
 
 ```
 push to main
-  └─ test job (npm ci && npm test)
-       └─ build job (Docker build & push to ghcr.io)
+  └─ test job (npm ci && npm test)                [GitHub-hosted runner]
+       └─ build job (Docker build & push to ghcr.io)   [GitHub-hosted runner]
+            └─ deploy job (docker compose pull && up -d)  [self-hosted runner, on the NAS]
 ```
 
-Pull requests also run the test job (no Docker build).
+Pull requests also run the test job (no Docker build, no deploy).
+
+The `deploy` job runs on a **self-hosted runner installed directly on the NAS** — see "Automated deployment" below for setup. This means deploys happen with no inbound ports opened on the NAS/router: the runner polls GitHub outbound only, same as any other outgoing connection.
 
 ## API
 
