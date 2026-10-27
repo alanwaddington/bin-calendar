@@ -9,13 +9,13 @@
 
 ## Summary
 
-| Item | Result |
-|------|--------|
-| Overall Assessment | Pass with comments ⚠️ |
-| Risk Level | Low–Medium |
-| Test Coverage | Gaps identified (backend good; frontend uncovered; endpoint SQL untested) |
-| Acceptance Criteria | 71 Met / 72 Total (1 Partially Met) |
-| Lint | 5 errors / 0 warnings (0 in diff, 5 pre-existing) |
+| Item | Result (as originally reviewed) | Result (after fixes, see Findings Resolution) |
+|------|--------|--------|
+| Overall Assessment | Pass with comments ⚠️ | Pass ✅ |
+| Risk Level | Low–Medium | Low |
+| Test Coverage | Gaps identified (backend good; frontend uncovered; endpoint SQL untested) | Closed — endpoint SQL now real-DB tested, `calendar.js` has 27 frontend tests |
+| Acceptance Criteria | 71 Met / 72 Total (1 Partially Met) | 72 Met / 72 Total |
+| Lint | 5 errors / 0 warnings (0 in diff, 5 pre-existing) | 0 errors / 0 warnings |
 
 ---
 
@@ -179,7 +179,7 @@ Verified independently by reading code — **checkbox state in the issue was not
 | AC23 | Failed fetch surfaces error, never blank | `calendar.js:17-21,92-98` (toast + inline) | Browser-verified | ✅ Met |
 | AC24 | All DB strings escaped | `calendar.js:55,217-221,280-286` | Code read | ✅ Met |
 | AC25 | Parameterised SQL, no credential fields | `server.js:86,95` (`?` bound), explicit column list | Code read | ✅ Met |
-| AC26 | API tests: happy, unknown id, no events, **multi-match de-dup**, ordering | `server.test.js:440-517` | De-dup asserted via SQL regex, not execution | ⚠️ **Partially Met** |
+| AC26 | API tests: happy, unknown id, no events, **multi-match de-dup**, ordering | `server.test.js:440-517` | De-dup now genuinely exercised: `tests/unit/calendar-events.test.js` (real DB, M2 fix) | ✅ Met (updated after fixes) |
 | AC27 | Coverage ≥80%, suite passes | — | 182/182 pass, 96.81% (verified this review) | ✅ Met |
 | AC28 | No new runtime deps, no build step | `package.json` (devDeps only) | Verified | ✅ Met |
 
@@ -196,7 +196,7 @@ All 38 remaining task-level checkboxes map onto AC1–AC28 above and carry the s
 | Dashboard, Settings, Logs verified unregressed | No shared CSS/JS modified; suite green | ✅ Met |
 | README reflects the new view | `README.md` diff | ✅ Met |
 
-**Summary: 71/72 criteria met. 1 Partially Met (AC26). 0 Not Met.**
+**Summary: 71/72 criteria met as originally reviewed; 72/72 after fixes (AC26 updated — see Findings Resolution). 0 Not Met.**
 
 ---
 
@@ -291,17 +291,19 @@ None — no Critical findings.
 
 ### Should fix before merge
 
-- [ ] M1: Add `try/catch` to `GET /api/properties/:id/events` so DB errors return JSON, not an HTML 500
-- [ ] M2: Add a real-DB integration test for the multi-match de-duplication using `tests/helpers/testDb.js`
+- [x] M1: Add `try/catch` to `GET /api/properties/:id/events` so DB errors return JSON, not an HTML 500 — fixed in `6b9a8c6`
+- [x] M2: Add a real-DB integration test for the multi-match de-duplication using `tests/helpers/testDb.js` — fixed in `6b9a8c6` (extracted `getPropertyEventsRows(db, propertyId)`, tested in `tests/unit/calendar-events.test.js`)
 
 ### Post-merge improvements
 
-- [ ] M3: Frontend test harness / unit tests for `calendar.js` pure functions — create issue via `/analyse`
-- [ ] m1: Guard against stale responses when switching properties
-- [ ] m2: Client-side hex validation before interpolating `colour` into `style`
-- [ ] m3: Fix the 5 pre-existing lint errors (separate PR)
-- [ ] m4: Declare `public/` globals explicitly rather than disabling `no-undef`
-- [ ] S2: Correct the stale `PUT /api/properties/:id` README row
+All of the below were brought forward into this PR at the user's explicit request, rather than deferred, despite the recommendations below suggesting otherwise.
+
+- [x] M3: Frontend test harness / unit tests for `calendar.js` pure functions — fixed in `8ef3cd1` (`tests/helpers/browserDom.js` + `tests/unit/calendar-frontend.test.js`, 27 tests), done directly rather than filed as a follow-up issue
+- [x] m1: Guard against stale responses when switching properties — fixed in `8ef3cd1` (monotonic request token in `selectCalendarProperty`)
+- [x] m2: Client-side hex validation before interpolating `colour` into `style` — fixed in `8ef3cd1`
+- [x] m3: Fix the 5 pre-existing lint errors — fixed in `af05d0f`, done directly in this PR rather than a separate PR
+- [x] m4: Declare `public/` globals explicitly rather than disabling `no-undef` — fixed in `f1133ae`
+- [x] S2: Correct the stale `PUT /api/properties/:id` README row — fixed in `fdd20c5`
 
 ---
 
@@ -309,11 +311,32 @@ None — no Critical findings.
 
 - [x] All acceptance criteria from the full issue hierarchy verified by reading actual code
 - [x] Every changed file read and audited
-- [ ] Tests cover happy path, error paths, and edge cases — **backend endpoint yes; SQL de-dup and all frontend behaviour no** (M2, M3)
-- [x] Lint run — zero errors introduced by this PR (5 pre-existing, outside the diff)
-- [x] No security vulnerabilities introduced (m2 noted as defence-in-depth only)
+- [x] Tests cover happy path, error paths, and edge cases — SQL de-dup now genuinely exercised (M2) and `calendar.js` now has 27 frontend tests (M3)
+- [x] Lint run — zero errors introduced by this PR (0 remaining anywhere — the 5 pre-existing errors were fixed per m3)
+- [x] No security vulnerabilities introduced (m2's defence-in-depth gap closed with client-side hex validation)
 - [x] No performance regressions
-- [ ] Error handling complete and consistent — **M1: new endpoint missing try/catch applied elsewhere in this PR**
+- [x] Error handling complete and consistent — M1 fixed, new endpoint now matches the rest of this PR's routes
 - [x] Logging adequate for debugging production issues
 - [x] Code follows existing codebase conventions
 - [x] No unnecessary changes outside scope of the issue (ESLint and the two bug fixes are justified and separately committed)
+
+---
+
+## Findings Resolution
+
+All findings from this review were addressed in follow-up commits on the same branch (`feature/23-property-calendar-view`), per explicit instruction to fix everything including the items originally recommended as follow-up issues or a separate PR:
+
+| Finding | Outcome | Commit |
+|---|---|---|
+| M1 | Fixed | `6b9a8c6` |
+| M2 | Fixed | `6b9a8c6` |
+| M3 | Fixed (done now, not deferred) | `8ef3cd1` |
+| m1 | Fixed | `8ef3cd1` |
+| m2 | Fixed | `8ef3cd1` |
+| m3 | Fixed (done now, not deferred) | `af05d0f` |
+| m4 | Fixed | `f1133ae` |
+| S1 | No action — flagged as a conscious-choice note, not a defect | — |
+| S2 | Fixed | `fdd20c5` |
+| S3 | No action — flagged as a conscious-choice note, not a defect | — |
+
+Full suite after fixes: 215/215 tests passing, 96.84% coverage, 0 lint errors/warnings anywhere in the repo.
