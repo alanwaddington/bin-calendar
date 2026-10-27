@@ -21,6 +21,7 @@
       <span>bin-calendar</span>
     </a>
     <nav class="topnav-links">
+      <a href="#calendar" class="nav-link" data-view="calendar">Calendar</a>
       <a href="#settings" class="nav-link" data-view="settings">Settings</a>
       <a href="#logs" class="nav-link" data-view="logs">Logs</a>
     </nav>
@@ -28,12 +29,14 @@
 
   <main class="page-content">
     <div id="view-dashboard" class="view"></div>
+    <div id="view-calendar" class="view hidden"></div>
     <div id="view-settings" class="view hidden"></div>
     <div id="view-logs" class="view hidden"></div>
   </main>
 
   <script src="/app.js"></script>
   <script src="/dashboard.js"></script>
+  <script src="/calendar.js"></script>
   <script src="/properties.js"></script>
   <script src="/logs.js"></script>
 </body>
