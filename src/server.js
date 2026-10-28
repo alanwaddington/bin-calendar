@@ -173,10 +173,20 @@ function excludeParenthesesOnlyMatches(rows) {
     if (kept.length > 0) {
       result.push(...kept);
     } else {
-      result.push({ ...group[0], label: null, colour: null, binTypeMatch: null });
+      result.push({ ...group[0], label: null, colour: null, binTypeMatch: null, is_garden_waste: 0 });
     }
   }
   return result;
+}
+
+// #33: Garden Waste is a paid, opt-in add-on. The fan-out join already
+// produces one row per matched bin_types rule, so dropping just the
+// garden-waste row for an opted-out property naturally leaves any other
+// match for the same event (e.g. the General Waste half of a combined
+// "Garden waste and general waste+food (...)" day) intact - no separate
+// combined-day handling needed here.
+function excludeOptedOutGardenWaste(rows) {
+  return rows.filter(r => !(r.is_garden_waste === 1 && r.garden_waste_opted_in === 0));
 }
 
 // Two different bin_types rules can legitimately share a label and colour
@@ -239,14 +249,15 @@ function expandDateRange(startDate, endDate) {
 
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
-    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour, bt.summary_match AS binTypeMatch
+    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour, bt.summary_match AS binTypeMatch, bt.is_garden_waste, p.garden_waste_opted_in
     FROM events e
+    JOIN properties p ON p.id = e.property_id
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
     ORDER BY e.start_date ASC, e.uid ASC, bt.id ASC
   `).all(propertyId);
 
-  const filteredRows = excludeParenthesesOnlyMatches(rows);
+  const filteredRows = excludeOptedOutGardenWaste(excludeParenthesesOnlyMatches(rows));
 
   // Stable-sorted by date (and uid as a tiebreak for same-date different
   // events) - ties between multiple matched rows for the SAME event keep
@@ -414,6 +425,8 @@ app.get('/api/next-collection', (req, res) => {
       bt.label            AS label,
       bt.colour           AS colour,
       bt.summary_match    AS binTypeMatch,
+      bt.is_garden_waste  AS is_garden_waste,
+      p.garden_waste_opted_in AS garden_waste_opted_in,
       e.property_id,
       p.label             AS property_label
     FROM events e
@@ -424,7 +437,7 @@ app.get('/api/next-collection', (req, res) => {
     ORDER BY e.start_date ASC, bt.id ASC
   `).all();
 
-  const filteredRows = excludeParenthesesOnlyMatches(rows);
+  const filteredRows = excludeOptedOutGardenWaste(excludeParenthesesOnlyMatches(rows));
 
   // Expand each row's [start_date, end_date) span into one entry per
   // covered day, offsetting the SQL-computed days_until by the day's

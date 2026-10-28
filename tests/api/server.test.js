@@ -903,6 +903,96 @@ describe('server API', () => {
     expect(sql).toMatch(/e\.end_date\s+IS\s+NOT\s+NULL\s+AND\s+e\.end_date\s*>\s*date\('now'\)/i);
   });
 
+  test('getNextCollection_sqlSelectsIsGardenWasteAndOptedInFlags', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/next-collection');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
+    expect(sql).toMatch(/is_garden_waste/);
+    expect(sql).toMatch(/garden_waste_opted_in/);
+  });
+
+  // #33: Garden Waste is a paid, opt-in add-on - excluded from display for
+  // any property that hasn't opted in.
+  test('getNextCollection_gardenWasteOptedOut_excludesGardenWasteRow', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(0);
+  });
+
+  test('getNextCollection_gardenWasteOptedIn_includesGardenWasteRow', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 1,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].colour).toBe('#92400e');
+  });
+
+  // The excluded garden-waste row sits on the SAME nearest date as a
+  // non-garden row (the real "X and Y" combined-day case, already split
+  // into separate rows by the fan-out join) - excluding it must not
+  // suppress the still-valid non-garden collection for that date.
+  test('getNextCollection_gardenWasteOptedOutOnCombinedDay_stillShowsTheNonGardenWasteRowForThatDate', async () => {
+    const summary = 'Garden waste and general waste+food (+food only after transition week)';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'waste+food', is_garden_waste: 0, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].colour).toBe('#6b7280');
+    expect(res.body.collections[0].label).toBe('general waste+food (+food only after transition week)');
+  });
+
+  // The nearest date's ONLY row is an excluded garden-waste one, but a
+  // later date has a real (non-garden) collection - the property must
+  // advance to that later date, not report no collection at all.
+  test('getNextCollection_gardenWasteOptedOutIsOnlyRowOnNearestDate_advancesToLaterNonGardenDate', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-11-07', endDate: null, days_until: 7, summary: 'Grey Bin',
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Grey', is_garden_waste: 0, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0]).toMatchObject({ date: '2026-11-07', colour: '#6b7280' });
+  });
+
   // --- GET /api/bin-types ---
 
   test('getBinTypes_returns200WithArray', async () => {
