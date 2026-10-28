@@ -140,6 +140,88 @@ describe('properties.js - Garden Waste opt-in (#33 Task 7)', () => {
     expect(putCall).toBeDefined();
     expect(putCall.body.garden_waste_opted_in).toBe(false);
   });
+
+  // PR #34 review finding m4: the modal had no ARIA role/labelling, no
+  // keyboard or backdrop dismissal, and no focus management - it could
+  // only be dismissed by mouse-clicking the Cancel button.
+  async function openGardenWasteOffWarning() {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', garden_waste_opted_in: 1,
+    };
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', body: [] },
+      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+    ], calls));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-garden-waste-1').checked = false;
+    await window.savePropertyEdit(1);
+    return { window, calls };
+  }
+
+  test('gardenWasteOffWarning_hasDialogRoleAriaModalAndLabelledBySetToTheTitle', async () => {
+    const { window } = await openGardenWasteOffWarning();
+
+    const modal = window.document.querySelector('.modal');
+    expect(modal.getAttribute('role')).toBe('dialog');
+    expect(modal.getAttribute('aria-modal')).toBe('true');
+    const labelId = modal.getAttribute('aria-labelledby');
+    expect(labelId).toBeTruthy();
+    expect(window.document.getElementById(labelId).textContent).toMatch(/Turn off Garden Waste collection/);
+  });
+
+  test('gardenWasteOffWarning_onOpen_movesFocusToTheCancelButton', async () => {
+    const { window } = await openGardenWasteOffWarning();
+
+    expect(window.document.activeElement.id).toBe('garden-waste-warning-cancel');
+  });
+
+  test('gardenWasteOffWarning_escapeKey_dismissesLikeCancel', async () => {
+    const { window, calls } = await openGardenWasteOffWarning();
+
+    window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(window.document.querySelector('.modal-overlay')).toBeNull();
+    expect(window.document.getElementById('prop-garden-waste-1').checked).toBe(true);
+    expect(calls.find(c => c.method === 'PUT')).toBeUndefined();
+  });
+
+  test('gardenWasteOffWarning_clickingTheBackdrop_dismissesLikeCancel', async () => {
+    const { window, calls } = await openGardenWasteOffWarning();
+
+    window.document.querySelector('.modal-overlay').click();
+
+    expect(window.document.querySelector('.modal-overlay')).toBeNull();
+    expect(window.document.getElementById('prop-garden-waste-1').checked).toBe(true);
+    expect(calls.find(c => c.method === 'PUT')).toBeUndefined();
+  });
+
+  test('gardenWasteOffWarning_clickingInsideTheModalItself_doesNotDismiss', async () => {
+    const { window } = await openGardenWasteOffWarning();
+
+    window.document.querySelector('.modal').click();
+
+    expect(window.document.querySelector('.modal-overlay')).not.toBeNull();
+  });
+
+  // The Escape listener is attached to `document` for the lifetime of the
+  // modal - it must be removed on close, or it leaks and fires again (e.g.
+  // re-checking a DIFFERENT, unrelated property's box) the next time any
+  // code on the page presses Escape for an unrelated reason.
+  test('gardenWasteOffWarning_afterConfirmCloses_escapeKeyNoLongerDoesAnything', async () => {
+    const { window } = await openGardenWasteOffWarning();
+    await window.document.getElementById('garden-waste-warning-confirm').onclick();
+
+    expect(() => {
+      window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    }).not.toThrow();
+    expect(window.document.querySelector('.modal-overlay')).toBeNull();
+  });
 });
 
 describe('properties.js - Bin Types is_garden_waste flag (#33 Task 7)', () => {

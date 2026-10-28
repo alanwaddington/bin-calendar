@@ -412,13 +412,21 @@ async function performPropertySave(id, label, ics_url, gardenWasteOptedIn) {
   }
 }
 
+// PR #34 review finding m4: the modal previously had no ARIA role/label,
+// no keyboard or backdrop dismissal, and no focus management - it could
+// only be dismissed by mouse-clicking Cancel. role="dialog"/aria-modal/
+// aria-labelledby identify it to assistive tech; Escape and a backdrop
+// click both behave exactly like Cancel (re-check the box, save nothing) -
+// the conventional dismissal affordance for this kind of overlay; and
+// focus moves to Cancel on open, the safe (non-destructive) default
+// action, so keyboard users land somewhere sensible immediately.
 function showGardenWasteOffWarning(id, label, ics_url) {
   const gardenEl = document.getElementById(`prop-garden-waste-${id}`);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal">
-      <div class="modal-title">Turn off Garden Waste collection?</div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="garden-waste-warning-title">
+      <div class="modal-title" id="garden-waste-warning-title">Turn off Garden Waste collection?</div>
       <p class="modal-body">Garden waste events already added to your calendar will be removed when this property next syncs. Your other bin collections won&rsquo;t be affected.</p>
       <div class="modal-actions">
         <button class="btn btn-secondary btn-sm" id="garden-waste-warning-cancel">Cancel</button>
@@ -427,14 +435,31 @@ function showGardenWasteOffWarning(id, label, ics_url) {
     </div>`;
   document.body.appendChild(overlay);
 
-  document.getElementById('garden-waste-warning-cancel').onclick = () => {
+  function onKeydown(e) {
+    if (e.key === 'Escape') cancel();
+  }
+
+  function closeModal() {
+    document.removeEventListener('keydown', onKeydown);
+    overlay.remove();
+  }
+
+  function cancel() {
     if (gardenEl) gardenEl.checked = true;
-    overlay.remove();
-  };
+    closeModal();
+  }
+
+  const cancelBtn = document.getElementById('garden-waste-warning-cancel');
+  cancelBtn.onclick = cancel;
   document.getElementById('garden-waste-warning-confirm').onclick = async () => {
-    overlay.remove();
+    closeModal();
     await performPropertySave(id, label, ics_url, false);
   };
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) cancel();
+  });
+  document.addEventListener('keydown', onKeydown);
+  cancelBtn.focus();
 }
 
 function confirmDeleteProperty(id) {
