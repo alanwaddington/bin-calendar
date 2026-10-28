@@ -329,7 +329,7 @@ describe('calendar.js rendering and state', () => {
     await loadPromise;
     await new Promise(r => setTimeout(r, 0));
 
-    // _calSelectedId is a private top-level `let` in calendar.js - unlike
+    // calendar.js's selection state is private top-level `let`s - unlike
     // `function` declarations, `let` does not become a window property even
     // via window.eval(), so assert on observable DOM state instead (exactly
     // what a real caller/user would see).
@@ -355,20 +355,5 @@ describe('calendar.js cross-view handoffs', () => {
     await new Promise(r => setTimeout(r, 0));
     expect(window.document.getElementById('cal-property-select').value).toBe('7');
     expect(window._calendarTargetPropertyId).toBeNull(); // consumed and cleared
-  });
-
-  test('goToPropertySettings_setsSettingsTargetToCurrentlySelectedPropertyAndNavigates', async () => {
-    const window = createCalendarWindow(mockFetch([
-      ['/api/properties', [{ id: 3, label: 'Only House' }]],
-      [/\/api\/properties\/3\/events/, { events: [] }],
-    ]));
-    window.registerView('settings', () => {}); // normally registered by properties.js
-
-    await window.loadCalendar();
-    window.goToPropertySettings();
-
-    expect(window._settingsTargetPropertyId).toBe(3);
-    expect(window.document.getElementById('view-settings').classList.contains('hidden')).toBe(false);
-    expect(window.document.getElementById('view-calendar').classList.contains('hidden')).toBe(true);
   });
 });

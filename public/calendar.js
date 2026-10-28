@@ -1,7 +1,6 @@
 registerView('calendar', loadCalendar);
 
 let _calProperties = [];
-let _calSelectedId = null;
 let _calEvents = [];
 let _calMonthsWithData = [];
 let _calViewYear = null;
@@ -47,23 +46,20 @@ function renderCalendarNoProperties(el) {
 function renderCalendarShell(el) {
   const showSwitcher = _calProperties.length > 1;
 
+  // No "Property settings" action here - Settings is already one click away
+  // via the top nav, and the only thing this button ever added was landing
+  // there with the current property's accordion pre-expanded, which isn't
+  // worth a dedicated button.
   el.innerHTML = `
-    <div class="cal-header">
-      ${showSwitcher ? `
+    ${showSwitcher ? `
+      <div class="cal-header">
         <div class="cal-switcher">
           <label for="cal-property-select">Property</label>
           <select id="cal-property-select" onchange="onCalendarPropertyChange(this.value)">
             ${_calProperties.map(p => `<option value="${p.id}">${escCalHtml(p.label)}</option>`).join('')}
           </select>
-        </div>` : '<div></div>'}
-      <button class="btn btn-secondary btn-sm" onclick="goToPropertySettings()">
-        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.8 4.8l1.4 1.4M13.8 13.8l1.4 1.4M4.8 15.2l1.4-1.4M13.8 6.2l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        Property settings
-      </button>
-    </div>
+        </div>
+      </div>` : ''}
     <div class="cal-monthnav">
       <button class="btn btn-secondary btn-sm" id="cal-prev-btn" onclick="stepCalendarMonth(-1)" aria-label="Previous month">‹</button>
       <div class="cal-month-heading" id="cal-month-heading"></div>
@@ -80,7 +76,6 @@ function onCalendarPropertyChange(value) {
 }
 
 async function selectCalendarProperty(id) {
-  _calSelectedId = id;
   const token = ++_calRequestToken;
   const select = document.getElementById('cal-property-select');
   if (select) select.value = String(id);
@@ -113,11 +108,6 @@ async function selectCalendarProperty(id) {
   _calViewMonth = now.getMonth();
 
   renderCalendarMonth();
-}
-
-function goToPropertySettings() {
-  window._settingsTargetPropertyId = _calSelectedId;
-  navigate('settings');
 }
 
 // ── Pure date helpers (never parse ISO date strings with `new Date()`) ────
