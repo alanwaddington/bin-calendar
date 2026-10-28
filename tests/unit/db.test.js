@@ -189,4 +189,16 @@ describe('db', () => {
     const row = db.prepare("SELECT is_garden_waste FROM bin_types WHERE summary_match = 'Grey'").get();
     expect(row.is_garden_waste).toBe(0);
   });
+
+  test('initDb_migration007_addsEventsDeletedToSyncResults', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    db.prepare("INSERT INTO sync_runs (status) VALUES ('running')").run();
+    const result = db.prepare(
+      "INSERT INTO sync_results (run_id, events_added, events_skipped) VALUES (1, 0, 0)"
+    ).run();
+    const row = db.prepare('SELECT events_deleted FROM sync_results WHERE id = ?').get(result.lastInsertRowid);
+    expect(row.events_deleted).toBe(0);
+  });
 });

@@ -2,6 +2,7 @@ const { getDb } = require('./db');
 const { fetchIcs } = require('./ics');
 const google = require('./google');
 const icloud = require('./icloud');
+const { isGardenWaste, stripGardenWasteSegments } = require('./bin-types');
 
 async function runSync() {
   const db = getDb();
@@ -74,7 +75,7 @@ async function syncProperty(db, runId, property) {
   const startedAt = new Date().toISOString();
   if (!property.ics_url) {
     const msg = 'No ICS URL configured — update the property with a calendar URL from the council website';
-    writeResult(db, runId, property.id, 0, 0, msg, startedAt);
+    writeResult(db, runId, property.id, 0, 0, 0, msg, startedAt);
     return { propertyId: property.id, error: msg };
   }
   try {
@@ -82,7 +83,7 @@ async function syncProperty(db, runId, property) {
 
     if (events.length === 0) {
       updateCredentialStatus(db, property.id, 'ok');
-      writeResult(db, runId, property.id, 0, 0, warnings.join('; ') || null, startedAt);
+      writeResult(db, runId, property.id, 0, 0, 0, warnings.join('; ') || null, startedAt);
       return { propertyId: property.id };
     }
 
@@ -90,17 +91,46 @@ async function syncProperty(db, runId, property) {
     const timeMin = new Date(Math.min(...dates));
     const timeMax = new Date(Math.max(...dates));
 
-    let existingUids;
+    // #33: classified against the full in-memory feed below (whatever
+    // range fetchIcs actually returned - often ~14 months), never against
+    // the local cache, which only ever holds a 6-month window (cacheEvents
+    // at the end of this function) and would silently under-filter
+    // anything beyond it.
+    const gardenMatchers = db.prepare('SELECT summary_match FROM bin_types WHERE is_garden_waste = 1')
+      .all().map(r => r.summary_match);
+
+    let existingByUid;
     if (property.calendar_type === 'google') {
       const existing = await google.listEvents(property, timeMin, timeMax);
-      existingUids = new Set(existing.map(e => e.iCalUID));
+      existingByUid = new Map(existing.map(e => [e.iCalUID, e.id]));
     } else {
-      existingUids = await icloud.listEventUids(property, timeMin, timeMax);
+      existingByUid = await icloud.listEventObjects(property, timeMin, timeMax);
     }
 
-    let added = 0, skipped = 0;
+    let added = 0, skipped = 0, deleted = 0;
     for (const event of events) {
-      if (existingUids.has(event.uid)) { skipped++; continue; }
+      // A combined day (e.g. "Garden waste and general waste+food (...)")
+      // is deliberately left alone here - stripping just the garden-waste
+      // segment from an already-pushed combined event is handled
+      // separately (Task 6), so it still falls through to the normal
+      // push/skip path below, unchanged, for now.
+      const isPureGardenWaste = isGardenWaste(event.summary, gardenMatchers)
+        && stripGardenWasteSegments(event.summary, gardenMatchers) === '';
+
+      if (!property.garden_waste_opted_in && isPureGardenWaste) {
+        if (existingByUid.has(event.uid)) {
+          const identifier = existingByUid.get(event.uid);
+          if (property.calendar_type === 'google') {
+            await google.deleteEvent(property, identifier);
+          } else {
+            await icloud.deleteEvent(property, identifier);
+          }
+          deleted++;
+        }
+        continue;
+      }
+
+      if (existingByUid.has(event.uid)) { skipped++; continue; }
       if (property.calendar_type === 'google') {
         await google.insertEvent(property, event);
       } else {
@@ -111,22 +141,22 @@ async function syncProperty(db, runId, property) {
 
     updateCredentialStatus(db, property.id, 'ok');
     cacheEvents(db, property.id, events);
-    writeResult(db, runId, property.id, added, skipped, warnings.join('; ') || null, startedAt);
+    writeResult(db, runId, property.id, added, skipped, deleted, warnings.join('; ') || null, startedAt);
     return { propertyId: property.id };
   } catch (err) {
     if (isAuthError(err)) {
       updateCredentialStatus(db, property.id, 'invalid');
     }
-    writeResult(db, runId, property.id, 0, 0, err.message, startedAt);
+    writeResult(db, runId, property.id, 0, 0, 0, err.message, startedAt);
     return { propertyId: property.id, error: err.message };
   }
 }
 
-function writeResult(db, runId, propertyId, added, skipped, error, startedAt) {
+function writeResult(db, runId, propertyId, added, skipped, deleted, error, startedAt) {
   db.prepare(`
-    INSERT INTO sync_results (run_id, property_id, events_added, events_skipped, error, started_at, completed_at)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(runId, propertyId, added, skipped, error, startedAt);
+    INSERT INTO sync_results (run_id, property_id, events_added, events_skipped, events_deleted, error, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(runId, propertyId, added, skipped, deleted, error, startedAt);
 }
 
 function purgeOldRecords(db) {

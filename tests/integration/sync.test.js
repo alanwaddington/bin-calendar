@@ -30,8 +30,11 @@ describe('sync', () => {
     fetchIcs.mockResolvedValue({ events: [], warnings: [] });
     google.listEvents.mockResolvedValue([]);
     google.insertEvent.mockResolvedValue(undefined);
+    google.deleteEvent.mockResolvedValue(undefined);
     icloud.listEventUids.mockResolvedValue(new Set());
+    icloud.listEventObjects.mockResolvedValue(new Map());
     icloud.insertEvent.mockResolvedValue(undefined);
+    icloud.deleteEvent.mockResolvedValue(undefined);
   });
 
   test('runSync_withNoProperties_returnsSkipped', async () => {
@@ -425,5 +428,207 @@ describe('sync', () => {
     const runCalls = mockPrepareReturn.run.mock.calls;
     const statusRun = runCalls.find(args => args[0] === 'invalid');
     expect(statusRun).toBeDefined();
+  });
+
+  // --- #33 Task 5: gate push / reconcile deletions on garden_waste_opted_in ---
+
+  test('runSync_gardenWasteOptedOut_doesNotPushPureGardenWasteEvent', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    expect(google.insertEvent).not.toHaveBeenCalled();
+  });
+
+  test('runSync_gardenWasteOptedOut_deletesAlreadyPushedGardenWasteEventOnGoogle', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-garden', id: 'google-event-id-1' }]);
+
+    await runSync();
+
+    expect(google.deleteEvent).toHaveBeenCalledWith(property, 'google-event-id-1');
+    expect(google.insertEvent).not.toHaveBeenCalled();
+  });
+
+  test('runSync_gardenWasteOptedOut_deletesAlreadyPushedGardenWasteEventOnIcloud', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-garden.ics', etag: '"e1"' };
+    icloud.listEventObjects.mockResolvedValue(new Map([['evt-garden', davObject]]));
+
+    await runSync();
+
+    expect(icloud.deleteEvent).toHaveBeenCalledWith(property, davObject);
+    expect(icloud.insertEvent).not.toHaveBeenCalled();
+  });
+
+  // Confirms the opt-out -> sync -> opt-in -> sync acceptance criterion:
+  // once opted in, a garden-waste event not yet present externally (i.e.
+  // withheld during a prior opted-out period) is pushed through the same
+  // new-vs-existing uid diff every other event already uses - no separate
+  // backfill mechanism needed.
+  test('runSync_gardenWasteOptedIn_pushesGardenWasteEventNotYetPresentExternally', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 1,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    expect(google.insertEvent).toHaveBeenCalledTimes(1);
+    expect(google.deleteEvent).not.toHaveBeenCalled();
+  });
+
+  test('runSync_gardenWasteOptedOut_neverDeletesNonGardenWasteEvents', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-grey', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-grey', id: 'google-event-id-2' }]);
+
+    await runSync();
+
+    expect(google.deleteEvent).not.toHaveBeenCalled();
+  });
+
+  test('runSync_gardenWasteOptedOut_recordsDeletedCountInSyncResults', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-garden', id: 'google-event-id-1' }]);
+
+    await runSync();
+
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const resultInsertCall = calls.find(q => q.includes('INSERT INTO sync_results'));
+    expect(resultInsertCall).toMatch(/events_deleted/);
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const resultRunCall = runCalls.find(args => args.length === 7 && args[2] === 0 && args[3] === 0 && args[4] === 1);
+    expect(resultRunCall).toBeDefined();
+  });
+
+  // Classification must use the full in-memory feed (whatever range
+  // fetchIcs actually returns), not the 6-month cache window - this would
+  // be undetectable via the cache alone since cacheEvents already runs
+  // regardless of opt-in status.
+  test('runSync_gardenWasteOptedOut_stillCachesTheGardenWasteEventDespiteNotPushingIt', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date(Date.now() + 86400000 * 10),
+        end: new Date(Date.now() + 86400000 * 10),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const cacheCall = calls.find(q => q.includes('INSERT OR REPLACE INTO events'));
+    expect(cacheCall).toBeDefined();
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const cacheRunCall = runCalls.find(args => args[1] === 'evt-garden');
+    expect(cacheRunCall).toBeDefined();
   });
 });
