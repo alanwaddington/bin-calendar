@@ -195,7 +195,7 @@ describe('calendar.js rendering and state', () => {
     const now = new Date();
     const y = now.getFullYear(), m0 = now.getMonth();
     const pad = n => String(n).padStart(2, '0');
-    const longLabel = 'General waste+food (+food only after transition week, please check the council website for exact dates)';
+    const longLabel = 'General Waste (Trolley, Garden Waste, Food Waste and Recycling all collected together this week due to a schedule change)';
 
     const window = createCalendarWindow(mockFetch([
       ['/api/properties', [{ id: 1, label: 'Home' }]],
