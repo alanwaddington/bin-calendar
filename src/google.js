@@ -1,10 +1,20 @@
-const { google } = require('googleapis');
 const { encryptJson, decryptJson } = require('./crypto');
 const { getDb } = require('./db');
 
 const SCOPE = 'https://www.googleapis.com/auth/calendar';
 
+// googleapis is a very large package (1000+ files across ~200 bundled API
+// clients) - requiring it eagerly at module load adds real startup cost to
+// every server boot, whether or not Google Calendar is even configured for
+// any property. Lazily requiring it here means that cost is only paid once,
+// on first actual use, and only if a Google-related function is called at
+// all. Node's require() cache makes every call after the first free.
+function getGoogleApi() {
+  return require('googleapis').google;
+}
+
 function createOAuthClient() {
+  const google = getGoogleApi();
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
@@ -45,14 +55,14 @@ async function getAuthenticatedClient(property) {
 
 async function listCalendars(property) {
   const auth = await getAuthenticatedClient(property);
-  const calendar = google.calendar({ version: 'v3', auth });
+  const calendar = getGoogleApi().calendar({ version: 'v3', auth });
   const res = await calendar.calendarList.list();
   return (res.data.items || []).map(c => ({ id: c.id, summary: c.summary, primary: !!c.primary }));
 }
 
 async function listEvents(property, timeMin, timeMax) {
   const auth = await getAuthenticatedClient(property);
-  const calendar = google.calendar({ version: 'v3', auth });
+  const calendar = getGoogleApi().calendar({ version: 'v3', auth });
   const res = await calendar.events.list({
     calendarId: property.calendar_id,
     timeMin: timeMin.toISOString(),
@@ -64,7 +74,7 @@ async function listEvents(property, timeMin, timeMax) {
 
 async function insertEvent(property, event) {
   const auth = await getAuthenticatedClient(property);
-  const calendar = google.calendar({ version: 'v3', auth });
+  const calendar = getGoogleApi().calendar({ version: 'v3', auth });
   const start = event.allDay
     ? { date: event.start.toISOString().slice(0, 10) }
     : { dateTime: event.start.toISOString() };
