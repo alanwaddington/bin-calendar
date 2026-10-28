@@ -328,6 +328,14 @@ function buildPropertyAccordion(p) {
           <label>Calendar type</label>
           <input value="${escAttr(calType)}" disabled style="background:var(--surface);color:var(--text-3)">
         </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="prop-garden-waste-${p.id}" ${p.garden_waste_opted_in ? 'checked' : ''}>
+            Garden Waste collection
+            <span class="badge badge-paid">PAID ADD-ON</span>
+          </label>
+          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Only enable this if your property has an active, paid Garden Waste subscription with the council. Garden waste reminders stay hidden from this app and your calendar until you switch this on.</p>
+        </div>
         ${showCalPicker ? `
         <div class="form-group">
           <label>Calendar</label>
@@ -365,11 +373,31 @@ async function loadGoogleCalendarsForProp(propertyId, currentCalendarId) {
 async function savePropertyEdit(id) {
   const label = document.getElementById(`prop-label-${id}`)?.value.trim();
   const ics_url = document.getElementById(`prop-ics-url-${id}`)?.value.trim();
+  const gardenEl = document.getElementById(`prop-garden-waste-${id}`);
   const errorEl = document.getElementById(`prop-save-error-${id}`);
   if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
+
+  const p = _settingsProperties.find(prop => prop.id === id);
+  const gardenWasteOptedIn = gardenEl ? gardenEl.checked : false;
+  // #33 Task 7 (Should): switching opted-in -> opted-out is a real
+  // destructive side effect on the user's actual external calendar (it
+  // removes already-pushed garden waste events on the next sync) - warn
+  // before saving, per the Analysis. Every other transition (unchanged,
+  // turning on, or a brand-new property with no prior pushed state) saves
+  // immediately exactly as before.
+  if (p && p.garden_waste_opted_in === 1 && !gardenWasteOptedIn) {
+    showGardenWasteOffWarning(id, label, ics_url);
+    return;
+  }
+
+  await performPropertySave(id, label, ics_url, gardenWasteOptedIn);
+}
+
+async function performPropertySave(id, label, ics_url, gardenWasteOptedIn) {
+  const errorEl = document.getElementById(`prop-save-error-${id}`);
   try {
-    await api('PUT', `/api/properties/${id}`, { label, ics_url });
+    await api('PUT', `/api/properties/${id}`, { label, ics_url, garden_waste_opted_in: gardenWasteOptedIn });
     const p = _settingsProperties.find(prop => prop.id === id);
     if (p && p.connected && p.calendar_type === 'google') {
       const calSel = document.getElementById(`cal-select-${id}`);
@@ -380,8 +408,33 @@ async function savePropertyEdit(id) {
     showToast('Property updated');
     await renderPropertyAccordions();
   } catch (err) {
-    errorEl.textContent = err.message;
+    if (errorEl) errorEl.textContent = err.message;
   }
+}
+
+function showGardenWasteOffWarning(id, label, ics_url) {
+  const gardenEl = document.getElementById(`prop-garden-waste-${id}`);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-title">Turn off Garden Waste collection?</div>
+      <p class="modal-body">Garden waste events already added to your calendar will be removed when this property next syncs. Your other bin collections won&rsquo;t be affected.</p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary btn-sm" id="garden-waste-warning-cancel">Cancel</button>
+        <button class="btn btn-danger btn-sm" id="garden-waste-warning-confirm">Turn off &amp; save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  document.getElementById('garden-waste-warning-cancel').onclick = () => {
+    if (gardenEl) gardenEl.checked = true;
+    overlay.remove();
+  };
+  document.getElementById('garden-waste-warning-confirm').onclick = async () => {
+    overlay.remove();
+    await performPropertySave(id, label, ics_url, false);
+  };
 }
 
 function confirmDeleteProperty(id) {
@@ -599,6 +652,14 @@ function buildAddPropertyAccordion() {
             <option value="icloud">iCloud</option>
           </select>
         </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="add-garden-waste">
+            Garden Waste collection
+            <span class="badge badge-paid">PAID ADD-ON</span>
+          </label>
+          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Only enable this if your property has an active, paid Garden Waste subscription with the council. Garden waste reminders stay hidden from this app and your calendar until you switch this on.</p>
+        </div>
         <div id="add-calendar-fields"></div>
         <div id="add-form-error" class="form-error"></div>
       </div>
@@ -677,8 +738,9 @@ async function addSaveAndGetGoogleUrl() {
   const errorEl = document.getElementById('add-form-error');
   if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
+  const garden_waste_opted_in = document.getElementById('add-garden-waste')?.checked || false;
   try {
-    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'google' });
+    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'google', garden_waste_opted_in });
     const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
     document.getElementById('add-google-auth-link').href = authUrl;
     document.getElementById('add-google-step1').style.display = 'none';
@@ -762,8 +824,9 @@ async function addSaveIcloud() {
     return;
   }
   errorEl.textContent = '';
+  const garden_waste_opted_in = document.getElementById('add-garden-waste')?.checked || false;
   try {
-    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'icloud' });
+    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'icloud', garden_waste_opted_in });
     await api('POST', `/api/properties/${id}/icloud`, {
       apple_id: appleId, app_specific_password: pass, calendar_url: calUrl,
     });
@@ -794,6 +857,7 @@ async function renderBinTypes() {
           <th>Match</th>
           <th>Label</th>
           <th>Colour</th>
+          <th>Garden Waste</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -816,6 +880,7 @@ function buildBinTypeRow(bt) {
           ${escHtml(bt.colour)}
         </span>
       </td>
+      <td>${bt.is_garden_waste ? '<span style="color:var(--success);font-weight:700">✓</span>' : ''}</td>
       <td style="display:flex;gap:6px;align-items:center">
         <button class="btn btn-secondary btn-sm" onclick="editBinTypeRow(${bt.id})">Edit</button>
         <button class="btn btn-danger btn-sm" id="bt-del-btn-${bt.id}" onclick="confirmDeleteBinType(${bt.id})">Delete</button>
@@ -832,6 +897,7 @@ function editBinTypeRow(id) {
     <td><input id="bt-match-${id}" value="${escAttr(bt.summary_match)}" style="min-width:80px"></td>
     <td><input id="bt-label-${id}" value="${escAttr(bt.label)}" style="min-width:80px"></td>
     <td><input id="bt-colour-${id}" type="color" value="${escAttr(bt.colour)}" style="width:60px"></td>
+    <td><input type="checkbox" id="bt-garden-${id}" ${bt.is_garden_waste ? 'checked' : ''}></td>
     <td style="display:flex;gap:6px;align-items:center">
       <button class="btn btn-primary btn-sm" onclick="saveBinTypeEdit(${id})">Save</button>
       <button class="btn btn-secondary btn-sm" onclick="renderBinTypes()">Cancel</button>
@@ -842,9 +908,10 @@ async function saveBinTypeEdit(id) {
   const match = document.getElementById(`bt-match-${id}`)?.value.trim();
   const label = document.getElementById(`bt-label-${id}`)?.value.trim();
   const colour = document.getElementById(`bt-colour-${id}`)?.value;
+  const is_garden_waste = document.getElementById(`bt-garden-${id}`)?.checked || false;
   if (!match || !label || !colour) { showToast('All fields are required', 'error'); return; }
   try {
-    await api('PUT', `/api/bin-types/${id}`, { summary_match: match, label, colour });
+    await api('PUT', `/api/bin-types/${id}`, { summary_match: match, label, colour, is_garden_waste });
     showToast('Bin type updated');
     await renderBinTypes();
   } catch (err) {
@@ -892,6 +959,10 @@ function showAddBinTypeForm() {
           <input id="new-bt-colour" type="color" value="#6b7280" style="width:60px">
         </div>
       </div>
+      <label class="checkbox-label" style="margin-bottom:var(--space-sm)">
+        <input type="checkbox" id="new-bt-garden">
+        This is the Garden Waste bin type
+      </label>
       <div id="new-bt-error" class="form-error" style="margin-bottom:var(--space-sm)"></div>
       <div style="display:flex;gap:var(--space-sm)">
         <button class="btn btn-primary btn-sm" onclick="saveNewBinType()">Add</button>
@@ -910,11 +981,12 @@ async function saveNewBinType() {
   const match = document.getElementById('new-bt-match')?.value.trim();
   const label = document.getElementById('new-bt-label')?.value.trim();
   const colour = document.getElementById('new-bt-colour')?.value;
+  const is_garden_waste = document.getElementById('new-bt-garden')?.checked || false;
   const errorEl = document.getElementById('new-bt-error');
   if (!match || !label || !colour) { errorEl.textContent = 'All fields are required'; return; }
   errorEl.textContent = '';
   try {
-    await api('POST', '/api/bin-types', { summary_match: match, label, colour });
+    await api('POST', '/api/bin-types', { summary_match: match, label, colour, is_garden_waste });
     showToast('Bin type added');
     await renderBinTypes();
   } catch (err) {
