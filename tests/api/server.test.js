@@ -1060,6 +1060,48 @@ describe('server API', () => {
     expect(res.body.summary_match).toBe('Grey');
   });
 
+  // PR #34 review finding C1: summary_match was validated for non-emptiness
+  // BEFORE wildcard characters were stripped, so a Match of pure wildcards
+  // (e.g. "%") passed validation and was persisted as an empty string. An
+  // empty summary_match is catastrophic once consumed by sync.js's Garden
+  // Waste classification (a blank matcher matches every event via
+  // String.includes('')), so this must be rejected at the API boundary,
+  // not just handled defensively downstream.
+  test('postBinType_withSummaryMatchThatIsOnlyWildcards_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '%', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/non-wildcard/i);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  test('postBinType_withSummaryMatchAllUnderscores_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '___', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('putBinType_withSummaryMatchThatIsOnlyWildcards_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: '%%', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/non-wildcard/i);
+  });
+
+  test('postBinType_withWhitespaceOnlySummaryMatch_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '   ', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+  });
+
   // --- #33 Task 1: is_garden_waste plumbing ---
 
   test('postBinType_withIsGardenWasteTrue_persists1', async () => {

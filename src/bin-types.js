@@ -12,7 +12,18 @@ function stripParentheticals(text) {
 // The shared "does this match text genuinely apply to this summary"
 // primitive: true only when matchText appears outside any parenthetical
 // span, so a caveat buried in parentheses can never cause a false match.
+//
+// PR #34 review finding C1: a blank (empty or whitespace-only) matchText
+// must never match - String.prototype.includes('') is always true, so
+// without this guard a single bin_types row whose summary_match was ever
+// persisted as '' (e.g. a Match of pure wildcard characters, now also
+// rejected at the API boundary) would match every summary. Defense in
+// depth: this protects every caller of this primitive, not just the
+// Garden Waste classification in sync.js, regardless of how a blank
+// value reached it (existing bad data, a direct DB write, a future
+// caller).
 function matchesOutsideParentheses(summary, matchText) {
+  if (!matchText || !matchText.trim()) return false;
   return stripParentheticals(summary).toLowerCase().includes(matchText.toLowerCase());
 }
 

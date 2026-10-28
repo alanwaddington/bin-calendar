@@ -483,7 +483,14 @@ function sanitiseBinTypeInput(body) {
   const { summary_match, label, colour, is_garden_waste } = body;
   if (!summary_match || !label || !colour) return { error: 'Missing fields: summary_match, label, colour required' };
   if (!HEX_COLOUR_RE.test(colour)) return { error: 'Invalid colour: must be a 6-digit hex value (e.g. #6b7280)' };
-  return { summary_match: summary_match.replace(/[%_]/g, ''), label, colour, is_garden_waste: toBoolInt(is_garden_waste) };
+  // PR #34 review finding C1: validation previously ran BEFORE wildcard
+  // stripping, so a Match of pure wildcards (e.g. "%") passed the !summary_match
+  // check and was persisted as an empty string - catastrophic once consumed
+  // by sync.js's Garden Waste classification (an empty matcher matches
+  // every event). Strip first, then reject if nothing meaningful remains.
+  const strippedMatch = summary_match.replace(/[%_]/g, '').trim();
+  if (!strippedMatch) return { error: 'Invalid match text: must contain at least one non-wildcard character' };
+  return { summary_match: strippedMatch, label, colour, is_garden_waste: toBoolInt(is_garden_waste) };
 }
 
 app.post('/api/bin-types', (req, res) => {
