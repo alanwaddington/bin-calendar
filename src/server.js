@@ -132,17 +132,46 @@ function attributeSummarySegment(summary, matchText) {
 }
 
 // Fans out to one row per matching bin_types rule when an event's summary
-// matches more than one - deliberately not deduplicated. Real feed data
-// does this for a genuine reason: East Ayrshire sometimes combines two
-// separate collections into one VEVENT's summary instead of sending two
-// VEVENTs (e.g. "Garden waste and general waste+food (+food only after
-// transition week)" on one transitional date) - each match should get its
-// own marker, not have one silently picked over the other. Both endpoints
-// that join events to bin_types use this same join, so they agree on how
-// many rows one event produces.
+// matches more than one, rather than silently picking one match over the
+// others. Real feed data does this for a genuine reason: East Ayrshire
+// sometimes combines two separate collections into one VEVENT's summary
+// instead of sending two VEVENTs (e.g. "Garden waste and general
+// waste+food (+food only after transition week)" on one transitional
+// date). Both endpoints that join events to bin_types use this same join,
+// so they agree on how many rows one event produces.
 const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'`;
 
+// Two different bin_types rules can legitimately share a label and colour
+// (e.g. two Match patterns both labelled "General Waste"), and the fan-out
+// join above has no way to know that - it produces one row per match
+// regardless of whether the results are visually distinguishable. This
+// collapses rows that are identical in every field the given keys cover
+// down to one, so two rules matching the same summary with the same label
+// and colour render as a single marker rather than two indistinguishable
+// duplicates. Any row that differs in even one key field is always kept,
+// however similar otherwise - this never collapses genuinely distinct bin
+// types, only true duplicates.
+function dedupeIdenticalRows(rows, keyFields) {
+  const seen = new Set();
+  return rows.filter(r => {
+    const key = keyFields.map(f => r[f]).join(' ');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Defense in depth alongside sync.js's own validEndDate() at ingestion
+// (which should mean this limit is never actually hit in practice) - this
+// bounds the blast radius here too, independent of how a bad end_date might
+// reach the events table (a future regression in cacheEvents, a direct DB
+// write, a migration). 31 days is generous - the real "Transition week"
+// span is 5 days - while a single corrupt/malformed end_date (e.g. a
+// multi-century DTEND) could otherwise expand to hundreds of thousands of
+// rows in one response.
+const MAX_SPAN_DAYS = 31;
 
 // ICS DTEND is exclusive (the day AFTER the last covered day), so a normal
 // single-day all-day event stores end_date = start_date + 1 day and this
@@ -163,7 +192,7 @@ function expandDateRange(startDate, endDate) {
   if (end <= start) return [startDate];
   const days = [];
   const pad = n => String(n).padStart(2, '0');
-  for (let t = start; t < end; t += MS_PER_DAY) {
+  for (let t = start, n = 0; t < end && n < MAX_SPAN_DAYS; t += MS_PER_DAY, n++) {
     const d = new Date(t);
     days.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`);
   }
@@ -188,14 +217,14 @@ function getPropertyEventsRows(db, propertyId) {
     .flatMap(r => expandDateRange(r.date, r.endDate).map(date => ({ ...r, date })))
     .sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid));
 
-  return expanded.map(r => ({
+  return dedupeIdenticalRows(expanded.map(r => ({
     uid: r.uid,
     date: r.date,
     summary: r.summary,
     label: r.label ? formatMatchedLabel(r.label, attributeSummarySegment(r.summary, r.binTypeMatch)) : r.summary,
     colour: r.colour || '#6b7a99',
     matched: r.label != null,
-  }));
+  })), ['uid', 'date', 'label', 'colour']);
 }
 
 app.get('/api/properties/:id/events', (req, res) => {
@@ -367,7 +396,7 @@ app.get('/api/next-collection', (req, res) => {
     .filter(r => r.days_until >= 0)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const collections = expanded
+  const collections = dedupeIdenticalRows(expanded
     .filter(r => expanded[0] && r.date === expanded[0].date)
     .map(r => ({
       date: r.date,
@@ -381,7 +410,7 @@ app.get('/api/next-collection', (req, res) => {
       colour: r.colour || '#6b7a99',
       propertyId: r.property_id,
       propertyLabel: r.property_label,
-    }));
+    })), ['propertyId', 'date', 'label', 'colour']);
 
   res.json({ collections });
 });

@@ -133,6 +133,24 @@ function purgeOldRecords(db) {
   db.prepare("DELETE FROM sync_runs WHERE completed_at < datetime('now', '-90 days')").run();
 }
 
+// DTEND is third-party feed data with no format/range guarantee - a
+// malformed or corrupt value (seen as far out as centuries ahead) would
+// otherwise be persisted and, since src/server.js expands [start, end) into
+// one calendar row per day, become the loop bound of a very large
+// expansion. 31 days is generous - the real "Transition week" span is 5
+// days - while still rejecting anything that couldn't plausibly represent a
+// real multi-day collection marker. Falls back to null (no end date) rather
+// than discarding the whole event, since start_date/summary are still
+// perfectly good data either way.
+const MAX_END_DAYS_AHEAD = 31;
+
+function validEndDate(rawEnd, start) {
+  if (!rawEnd) return null;
+  const end = new Date(rawEnd);
+  const daysAhead = (end - start) / (24 * 60 * 60 * 1000);
+  return (daysAhead > 0 && daysAhead <= MAX_END_DAYS_AHEAD) ? end.toISOString().slice(0, 10) : null;
+}
+
 function cacheEvents(db, propertyId, events) {
   const sixMonthsAhead = new Date();
   sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
@@ -148,7 +166,7 @@ function cacheEvents(db, propertyId, events) {
       const start = new Date(event.start);
       if (start < today || start > sixMonthsAhead) continue;
       const startDate = start.toISOString().slice(0, 10);
-      const endDate = event.end ? new Date(event.end).toISOString().slice(0, 10) : null;
+      const endDate = validEndDate(event.end, start);
       upsert.run(propertyId, event.uid, event.summary, startDate, endDate);
     }
   });

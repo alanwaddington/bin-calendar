@@ -42,6 +42,51 @@ describe('getPropertyEventsRows', () => {
     expect(events.every(e => e.matched)).toBe(true);
   });
 
+  // PR #31 review finding M1: the removed correlated subquery made it
+  // structurally impossible for one event to produce two identical
+  // markers. The fan-out join removes that guarantee - if two bin_types
+  // rules share a label and colour and both match one summary, the fan-out
+  // produces two rows that render as the exact same marker twice. Confirmed
+  // against the review's real-world-shaped case: Match "Trolley" and Match
+  // "food" both -> Label "General Waste" / same colour, summary
+  // "Trolley+food" matches both.
+  test('getPropertyEventsRows_withTwoRulesSharingLabelAndColour_collapsesToOneMarker', () => {
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Trolley', 'General Waste', '#6b7280')"
+    ).run();
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('food', 'General Waste', '#6b7280')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-dup', 'Trolley+food', '2026-10-29')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].label).toBe('General Waste (Trolley+food)');
+  });
+
+  // Two rules that match the same summary but have a DIFFERENT label or
+  // colour must still both appear - the dedup is scoped to byte-for-byte
+  // identical markers only, never to collapsing genuinely distinct bin
+  // types (that would silently reintroduce the original pre-fan-out bug).
+  test('getPropertyEventsRows_withTwoRulesSharingLabelButDifferentColour_keepsBothMarkers', () => {
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Trolley', 'General Waste', '#6b7280')"
+    ).run();
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('food', 'General Waste', '#111111')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-diff-colour', 'Trolley+food', '2026-10-29')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(2);
+  });
+
   test('getPropertyEventsRows_whenSummaryHasExtraInfoBeyondTheMatch_appendsRawSummaryInParens', () => {
     // The label "General Waste" doesn't equal and isn't contained in the
     // summary "Grey Bin Plus Food" (the word "Grey" matched the rule, but
@@ -172,6 +217,24 @@ describe('getPropertyEventsRows', () => {
     expect(events.every(e => e.summary === 'Transition week')).toBe(true);
   });
 
+  // PR #31 review finding M2: expandDateRange itself must bound how far it
+  // will expand, independent of sync.js's own validation at ingestion -
+  // defense in depth against data that reaches the events table some other
+  // way (a future regression in cacheEvents, a direct DB write, a migration).
+  // Without this, one event with a corrupt/malformed end_date would produce
+  // hundreds of thousands of rows (measured during review: 355,077 rows,
+  // 47MB, for a 2999-01-01 end_date).
+  test('getPropertyEventsRows_withCorruptFarFutureEndDate_clampsExpansionInsteadOfProducingHundredsOfThousandsOfRows', () => {
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, 'u-corrupt', 'Malformed Long Span', '2026-11-01', '2999-01-01')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events.length).toBeLessThanOrEqual(31);
+    expect(events[0].date).toBe('2026-11-01');
+  });
+
   test('getPropertyEventsRows_withNormalSingleDayEvent_returnsExactlyOneRowNotExpanded', () => {
     // Every other real event in the feed has end_date = start_date + 1 day
     // (the standard ICS all-day-event convention) - this must NOT expand
@@ -215,6 +278,39 @@ describe('getPropertyEventsRows', () => {
 
     expect(events.map(e => e.date)).toEqual([
       '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-01', '2026-11-02', '2026-11-03',
+    ]);
+  });
+
+  // PR #31 review finding S2: expansion (one event -> one row per covered
+  // day) and fan-out (one event -> one row per matching bin_types rule)
+  // are each tested in isolation elsewhere, but nothing locked in that they
+  // compose correctly for an event that is BOTH a multi-day span AND a
+  // multi-rule match - the interaction most likely to break under future
+  // refactoring of either half. A 3-day span matching 2 distinct bin types
+  // must produce 3 x 2 = 6 rows, correctly ordered: each day's two matches
+  // adjacent (bt.id order), days themselves ascending.
+  test('getPropertyEventsRows_withSpanEventMatchingMultipleBinTypes_producesDaysTimesMatchesRows', () => {
+    // 'Grey' and 'Brown' are both seeded bin_types (003.sql) and both
+    // substrings of this summary. Deliberately avoids the word "and" so
+    // this test stays isolated to span x fan-out composition, without also
+    // exercising the unrelated "X and Y" segment-splitting from S1.
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, 'u-span-multi', 'Grey & Brown combined', '2026-12-01', '2026-12-04')"
+    ).run(propertyId); // 3-day span (Dec 1,2,3) x 2 matches (Grey->General Waste id 1, Brown->Garden Waste id 3)
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(6);
+    expect(events.map(e => e.date)).toEqual([
+      '2026-12-01', '2026-12-01',
+      '2026-12-02', '2026-12-02',
+      '2026-12-03', '2026-12-03',
+    ]);
+    // Each day pairs the same two bin types in the same (bt.id) order.
+    expect(events.map(e => e.colour)).toEqual([
+      '#6b7280', '#92400e',
+      '#6b7280', '#92400e',
+      '#6b7280', '#92400e',
     ]);
   });
 

@@ -780,6 +780,29 @@ describe('server API', () => {
     expect(general.label).toBe('general waste+food (+food only after transition week)');
   });
 
+  // PR #31 review finding M1: two bin_types rules sharing a label and
+  // colour, both matching the same summary, must collapse to one
+  // collection - not render as two indistinguishable duplicates (which
+  // would also disagree with the Calendar page's own dedup).
+  test('getNextCollection_withTwoRulesSharingLabelAndColour_collapsesToOneCollection', async () => {
+    const summary = 'Trolley+food';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-10-29', endDate: null, days_until: 1, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Trolley', property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-10-29', endDate: null, days_until: 1, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'food', property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].label).toBe('General Waste (Trolley+food)');
+  });
+
   // A span event whose start_date has already passed must still be found by
   // the WHERE clause as long as it's still ongoing (end_date still in the
   // future) - otherwise it would silently vanish from next-collection
