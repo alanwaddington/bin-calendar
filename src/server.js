@@ -113,16 +113,48 @@ const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON bt.id = (
       ORDER BY b2.id LIMIT 1
     )`;
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// ICS DTEND is exclusive (the day AFTER the last covered day), so a normal
+// single-day all-day event stores end_date = start_date + 1 day and this
+// returns exactly one day - no change from today's behaviour. A genuine
+// multi-day span (e.g. East Ayrshire's "Transition week", which their own
+// site shows on every weekday it covers, not just the first) expands to one
+// entry per covered day. No end_date (or one <= start_date, which should
+// never happen but must not loop) also falls back to a single day.
+// Date arithmetic uses Date.UTC throughout - start_date/end_date are always
+// UTC calendar-date strings (sync.js derives them via toISOString()), and
+// pure UTC millisecond stepping has no DST edge cases to worry about.
+function expandDateRange(startDate, endDate) {
+  if (!endDate) return [startDate];
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const start = Date.UTC(sy, sm - 1, sd);
+  const end = Date.UTC(ey, em - 1, ed);
+  if (end <= start) return [startDate];
+  const days = [];
+  const pad = n => String(n).padStart(2, '0');
+  for (let t = start; t < end; t += MS_PER_DAY) {
+    const d = new Date(t);
+    days.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`);
+  }
+  return days;
+}
+
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
-    SELECT e.uid, e.start_date AS date, e.summary, bt.label, bt.colour
+    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour
     FROM events e
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
     ORDER BY e.start_date ASC, e.uid ASC
   `).all(propertyId);
 
-  return rows.map(r => ({
+  const expanded = rows
+    .flatMap(r => expandDateRange(r.date, r.endDate).map(date => ({ ...r, date })))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid));
+
+  return expanded.map(r => ({
     uid: r.uid,
     date: r.date,
     summary: r.summary,
@@ -272,6 +304,7 @@ app.get('/api/next-collection', (req, res) => {
   const rows = getDb().prepare(`
     SELECT
       e.start_date        AS date,
+      e.end_date           AS endDate,
       CAST((julianday(e.start_date) - julianday(date('now'))) AS INTEGER) AS days_until,
       e.summary,
       bt.label            AS label,
@@ -282,11 +315,25 @@ app.get('/api/next-collection', (req, res) => {
     JOIN properties p ON p.id = e.property_id
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.start_date >= date('now')
+       OR (e.end_date IS NOT NULL AND e.end_date > date('now'))
     ORDER BY e.start_date ASC
   `).all();
 
-  const collections = rows
-    .filter(r => rows[0] && r.date === rows[0].date)
+  // Expand each row's [start_date, end_date) span into one entry per
+  // covered day, offsetting the SQL-computed days_until by the day's
+  // position within the span - day 0 is the row's own start_date (whose
+  // days_until SQL already got right), day 1 is start_date+1 (days_until+1),
+  // and so on. This is what lets a span event already in progress (started
+  // in the past, per the WHERE clause above) surface dated and days-until'd
+  // for TODAY - the correct point within the span - rather than for its
+  // (by now past) start_date, or vanishing once that start_date has passed.
+  const expanded = rows
+    .flatMap(r => expandDateRange(r.date, r.endDate).map((date, i) => ({ ...r, date, days_until: r.days_until + i })))
+    .filter(r => r.days_until >= 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const collections = expanded
+    .filter(r => expanded[0] && r.date === expanded[0].date)
     .map(r => ({
       date: r.date,
       daysUntil: r.days_until,

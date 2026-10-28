@@ -613,6 +613,57 @@ describe('server API', () => {
     expect(res.body.collections).toHaveLength(0);
   });
 
+  // East Ayrshire's real feed sends "Transition week" as a single VEVENT
+  // spanning DTSTART=Mon..DTEND=Sat (ICS DTEND exclusive -> Mon-Fri
+  // covered) rather than five separate VEVENTs. next-collection must
+  // recompute daysUntil per expanded day rather than reusing the
+  // SQL-computed value for the event's original start_date.
+  test('getNextCollection_withMultiDaySpanEventStartingToday_showsDayZeroOfTheSpan', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-02',
+        endDate: '2026-04-07', // spans Apr 2,3,4,5,6
+        days_until: 0,
+        summary: 'Transition week',
+        label: null,
+        colour: null,
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0]).toMatchObject({ date: '2026-04-02', daysUntil: 0 });
+  });
+
+  test('getNextCollection_withMultiDaySpanEventAlreadyInProgress_showsTodaysDayOfTheSpanNotTheStart', async () => {
+    // The span started 2 days ago (days_until: -2 for its start_date) but
+    // is still ongoing - the event must still surface, dated and
+    // days-until'd for TODAY (the correct point within the span), not
+    // silently disappear once its start_date is in the past.
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-01', // started 2 days before "now" in SQL's own days_until terms
+        endDate: '2026-04-06', // spans Apr 1,2,3,4,5 -> today (days_until 0) is Apr 3
+        days_until: -2,
+        summary: 'Transition week',
+        label: null,
+        colour: null,
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0]).toMatchObject({ date: '2026-04-03', daysUntil: 0 });
+  });
+
   test('getNextCollection_withNoBinTypeMatch_returnsRawSummaryAndNeutralColour', async () => {
     mockPrepare.all.mockReturnValueOnce([
       {
@@ -689,6 +740,19 @@ describe('server API', () => {
     const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
     expect(sql).toMatch(/LIMIT 1/i);
     expect(sql).not.toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+  });
+
+  // A span event whose start_date has already passed must still be found by
+  // the WHERE clause as long as it's still ongoing (end_date still in the
+  // future) - otherwise it would silently vanish from next-collection
+  // partway through, even though it's still the current collection.
+  test('getNextCollection_sqlIncludesStillOngoingSpanEventsNotJustFutureStartDates', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/next-collection');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
+    expect(sql).toMatch(/e\.end_date\s+IS\s+NOT\s+NULL\s+AND\s+e\.end_date\s*>\s*date\('now'\)/i);
   });
 
   // --- GET /api/bin-types ---

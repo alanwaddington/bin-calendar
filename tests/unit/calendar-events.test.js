@@ -112,6 +112,73 @@ describe('getPropertyEventsRows', () => {
     expect(events).toEqual([]);
   });
 
+  // East Ayrshire's real feed sends "Transition week" as a single VEVENT
+  // spanning DTSTART=Mon..DTEND=Sat (ICS DTEND is exclusive, so the covered
+  // days are Mon-Fri) rather than five separate VEVENTs - their own site
+  // shows it on every weekday, so our calendar should too, not just the
+  // first day.
+  test('getPropertyEventsRows_withMultiDaySpanEvent_expandsToOneRowPerCoveredDay', () => {
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, 'u-span', 'Transition week', '2026-11-23', '2026-11-28')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events.map(e => e.date)).toEqual([
+      '2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27',
+    ]);
+    // Every expanded day carries the same event's identity and label - it's
+    // genuinely one event, just covering multiple days.
+    expect(events.every(e => e.uid === 'u-span')).toBe(true);
+    expect(events.every(e => e.summary === 'Transition week')).toBe(true);
+  });
+
+  test('getPropertyEventsRows_withNormalSingleDayEvent_returnsExactlyOneRowNotExpanded', () => {
+    // Every other real event in the feed has end_date = start_date + 1 day
+    // (the standard ICS all-day-event convention) - this must NOT expand
+    // into two rows.
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, 'u-normal', 'Grey Bin', '2026-11-05', '2026-11-06')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].date).toBe('2026-11-05');
+  });
+
+  test('getPropertyEventsRows_withNullEndDate_returnsExactlyOneRowNotExpanded', () => {
+    // end_date is nullable (cacheEvents stores null when the feed didn't
+    // supply a DTEND) - must behave exactly like a single-day event, not
+    // throw or expand indefinitely.
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, 'u-no-end', 'Grey Bin', '2026-11-05', NULL)"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].date).toBe('2026-11-05');
+  });
+
+  test('getPropertyEventsRows_withSpanEventOverlappingALaterSingleDayEvent_remainsDateSortedAfterExpansion', () => {
+    // A span event expanding forward must not disturb overall date
+    // ordering just because it was the "earliest" row before expansion -
+    // the expanded days have to be re-sorted, not just flattened in place.
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date, end_date) VALUES (?, 'u-span', 'Transition week', '2026-10-30', '2026-11-04')"
+    ).run(propertyId); // expands to Oct 30, 31, Nov 1, 2, 3
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-single', 'Grey Bin', '2026-11-01')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events.map(e => e.date)).toEqual([
+      '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-01', '2026-11-02', '2026-11-03',
+    ]);
+  });
+
   test('getPropertyEventsRows_onlyReturnsEventsForTheGivenProperty', () => {
     const otherPropertyId = db.prepare(
       "INSERT INTO properties (label, uprn, calendar_type) VALUES ('Other', '67890', 'google')"
