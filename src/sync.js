@@ -39,7 +39,13 @@ async function runSync() {
       return { status: 200, message: 'Skipped — no properties configured' };
     }
 
-    const results = await Promise.all(properties.map(p => syncProperty(db, runId, p)));
+    // PR #34 review finding S2: bin_types is global, not per-property, so
+    // querying it once per property inside syncProperty (the previous
+    // approach) was wasteful - queried once here and passed down instead.
+    const gardenMatchers = db.prepare('SELECT summary_match FROM bin_types WHERE is_garden_waste = 1')
+      .all().map(r => r.summary_match);
+
+    const results = await Promise.all(properties.map(p => syncProperty(db, runId, p, gardenMatchers)));
 
     const failed = results.filter(r => r.error);
     const succeeded = results.filter(r => !r.error);
@@ -71,11 +77,19 @@ function updateCredentialStatus(db, propertyId, status) {
     .run(status, propertyId);
 }
 
-async function syncProperty(db, runId, property) {
+// PR #34 review finding M2: the current remote summary of an already-
+// pushed event, so the combined-day branch below can skip rewriting an
+// event that already carries the correct (stripped) summary from a prior
+// sync, instead of rewriting it identically on every single run.
+function currentRemoteSummary(property, identifier) {
+  return property.calendar_type === 'google' ? identifier.summary : icloud.extractSummary(identifier.data);
+}
+
+async function syncProperty(db, runId, property, gardenMatchers) {
   const startedAt = new Date().toISOString();
   if (!property.ics_url) {
     const msg = 'No ICS URL configured — update the property with a calendar URL from the council website';
-    writeResult(db, runId, property.id, 0, 0, 0, msg, startedAt);
+    writeResult(db, runId, property.id, { error: msg, startedAt });
     return { propertyId: property.id, error: msg };
   }
   try {
@@ -83,7 +97,7 @@ async function syncProperty(db, runId, property) {
 
     if (events.length === 0) {
       updateCredentialStatus(db, property.id, 'ok');
-      writeResult(db, runId, property.id, 0, 0, 0, warnings.join('; ') || null, startedAt);
+      writeResult(db, runId, property.id, { error: warnings.join('; ') || null, startedAt });
       return { propertyId: property.id };
     }
 
@@ -96,13 +110,14 @@ async function syncProperty(db, runId, property) {
     // the local cache, which only ever holds a 6-month window (cacheEvents
     // at the end of this function) and would silently under-filter
     // anything beyond it.
-    const gardenMatchers = db.prepare('SELECT summary_match FROM bin_types WHERE is_garden_waste = 1')
-      .all().map(r => r.summary_match);
 
     let existingByUid;
     if (property.calendar_type === 'google') {
+      // PR #34 review finding M2: carries each event's current summary
+      // alongside its id, so the combined-day branch can tell whether a
+      // rewrite is actually needed before calling updateEventSummary.
       const existing = await google.listEvents(property, timeMin, timeMax);
-      existingByUid = new Map(existing.map(e => [e.iCalUID, e.id]));
+      existingByUid = new Map(existing.map(e => [e.iCalUID, { id: e.id, summary: e.summary }]));
     } else {
       existingByUid = await icloud.listEventObjects(property, timeMin, timeMax);
     }
@@ -122,12 +137,13 @@ async function syncProperty(db, runId, property) {
       if (!property.garden_waste_opted_in && isPureGardenWaste) {
         if (existingByUid.has(event.uid)) {
           const identifier = existingByUid.get(event.uid);
-          if (property.calendar_type === 'google') {
-            await google.deleteEvent(property, identifier);
-          } else {
-            await icloud.deleteEvent(property, identifier);
-          }
-          deleted++;
+          // PR #34 review finding m2: only count a CONFIRMED deletion -
+          // if the provider call failed, nothing actually changed on the
+          // external calendar, so it must not be reported as if it had.
+          const ok = property.calendar_type === 'google'
+            ? await google.deleteEvent(property, identifier.id)
+            : await icloud.deleteEvent(property, identifier);
+          if (ok) deleted++;
         }
         continue;
       }
@@ -135,20 +151,23 @@ async function syncProperty(db, runId, property) {
       if (!property.garden_waste_opted_in && isCombinedWithGardenWaste) {
         const strippedEvent = { ...event, summary: strippedSummary };
         if (existingByUid.has(event.uid)) {
-          // #33 Task 6: rewrite in place rather than delete-and-reinsert,
-          // which would lose the non-garden-waste half for however long
-          // the delete and the next sync's re-push are apart. Only
-          // attempted for iCloud, where tsdav's updateCalendarObject gives
-          // an explicit, documented update path. Google's events.import
-          // has no documented behaviour for re-importing an existing
-          // iCalUID, so re-pushing it here could just as easily create a
-          // duplicate as update it - left unchanged as a documented
-          // limitation rather than risk that or an incorrect delete.
-          if (property.calendar_type === 'icloud') {
-            await icloud.updateEvent(property, existingByUid.get(event.uid), strippedEvent);
-            added++;
-          } else {
+          const identifier = existingByUid.get(event.uid);
+          if (currentRemoteSummary(property, identifier) === strippedSummary) {
+            // PR #34 review finding M2: already up to date from a prior
+            // sync - rewriting it again would be a no-op write that only
+            // bumps the event's etag/sequence on the user's own devices.
             skipped++;
+          } else {
+            // PR #34 review finding M1: rewritten in place for BOTH
+            // providers now - Google's events.patch is a documented,
+            // ID-addressed, idempotent update (the original "no safe way
+            // to update Google in place" rationale didn't actually hold).
+            // Only a CONFIRMED update is counted; a failed one leaves the
+            // event stale for this run, to be retried on the next sync.
+            const ok = property.calendar_type === 'icloud'
+              ? await icloud.updateEvent(property, identifier, strippedEvent)
+              : await google.updateEventSummary(property, identifier.id, strippedSummary);
+            if (ok) added++;
           }
         } else {
           if (property.calendar_type === 'google') {
@@ -172,18 +191,21 @@ async function syncProperty(db, runId, property) {
 
     updateCredentialStatus(db, property.id, 'ok');
     cacheEvents(db, property.id, events);
-    writeResult(db, runId, property.id, added, skipped, deleted, warnings.join('; ') || null, startedAt);
+    writeResult(db, runId, property.id, { added, skipped, deleted, error: warnings.join('; ') || null, startedAt });
     return { propertyId: property.id };
   } catch (err) {
     if (isAuthError(err)) {
       updateCredentialStatus(db, property.id, 'invalid');
     }
-    writeResult(db, runId, property.id, 0, 0, 0, err.message, startedAt);
+    writeResult(db, runId, property.id, { error: err.message, startedAt });
     return { propertyId: property.id, error: err.message };
   }
 }
 
-function writeResult(db, runId, propertyId, added, skipped, deleted, error, startedAt) {
+// PR #34 review finding S1: an options object rather than a growing list
+// of positional booleans/numbers - three consecutive 0s made a transposed
+// argument easy to introduce and hard to spot in a diff.
+function writeResult(db, runId, propertyId, { added = 0, skipped = 0, deleted = 0, error = null, startedAt }) {
   db.prepare(`
     INSERT INTO sync_results (run_id, property_id, events_added, events_skipped, events_deleted, error, started_at, completed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))

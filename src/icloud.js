@@ -77,12 +77,27 @@ async function insertEvent(property, event) {
 // half for however long the delete and the next sync's re-push are apart.
 // Needs the dav object's own url/etag (from listEventObjects), which is
 // exactly what updateCalendarObject's optimistic-concurrency check requires.
+//
+// PR #34 review findings m1/m2: only the update call itself is caught
+// (an auth/login failure from createClient still propagates, matching
+// deleteEvent's error-boundary placement) - previously this had NO error
+// handling at all, so a transient CalDAV failure (e.g. a 412 etag
+// conflict) would propagate to syncProperty's catch block and abort every
+// remaining event for that property's sync. Returns whether the update
+// actually succeeded, so sync.js can count confirmed updates rather than
+// attempts.
 async function updateEvent(property, davObject, event) {
   const creds = decryptJson(property.credentials);
   const client = await createClient(creds);
-  await client.updateCalendarObject({
-    calendarObject: { url: davObject.url, etag: davObject.etag, data: buildVCalendarString(event) },
-  });
+  try {
+    await client.updateCalendarObject({
+      calendarObject: { url: davObject.url, etag: davObject.etag, data: buildVCalendarString(event) },
+    });
+    return true;
+  } catch (err) {
+    console.error(`Failed to update iCloud event for property ${property.id}:`, err.message);
+    return false;
+  }
 }
 
 // #33: deletes a previously-pushed event when a property opts out of
@@ -90,14 +105,30 @@ async function updateEvent(property, davObject, event) {
 // failure from createClient still propagates like every other operation
 // here. A per-event delete failure (already removed, transient API error)
 // is logged and swallowed so it never aborts the rest of the sync run.
+//
+// PR #34 review finding m2: returns whether the delete actually succeeded,
+// so sync.js's events_deleted count reflects CONFIRMED deletions rather
+// than merely attempted ones.
 async function deleteEvent(property, davObject) {
   const creds = decryptJson(property.credentials);
   const client = await createClient(creds);
   try {
     await client.deleteCalendarObject({ calendarObject: davObject });
+    return true;
   } catch (err) {
     console.error(`Failed to delete iCloud event for property ${property.id}:`, err.message);
+    return false;
   }
+}
+
+// PR #34 review finding M2: lets sync.js check whether an already-pushed
+// event's remote summary already matches the stripped summary before
+// writing, so a combined-day event isn't rewritten identically on every
+// single sync run (which would needlessly bump its etag/sequence on the
+// user's own devices for no actual change).
+function extractSummary(iCalString) {
+  const match = iCalString?.match(/^SUMMARY:(.+)$/m);
+  return match ? match[1].trim() : null;
 }
 
 function toIcsDate(date) {
@@ -115,4 +146,4 @@ async function checkCredentials(property) {
   }
 }
 
-module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, updateEvent, deleteEvent, checkCredentials };
+module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, updateEvent, deleteEvent, extractSummary, checkCredentials };

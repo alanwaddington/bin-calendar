@@ -24,7 +24,7 @@ jest.mock('../../src/crypto', () => ({
 
 const { DAVClient } = require('tsdav');
 const { decryptJson } = require('../../src/crypto');
-const { fetchCalendars, listEventUids, insertEvent, listEventObjects, deleteEvent, updateEvent } = require('../../src/icloud');
+const { fetchCalendars, listEventUids, insertEvent, listEventObjects, deleteEvent, updateEvent, extractSummary } = require('../../src/icloud');
 
 describe('icloud', () => {
   beforeEach(() => {
@@ -146,6 +146,23 @@ describe('icloud', () => {
     expect(uids.has('xyz789')).toBe(true);
   });
 
+  // PR #34 review finding m3: a calendar object with no parseable UID
+  // (malformed data, or a non-VEVENT component) must be skipped rather
+  // than poisoning the map with an undefined key.
+  test('listEventObjects_withObjectThatHasNoParseableUid_isExcludedFromTheMap', async () => {
+    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
+    mockInstance.fetchCalendarObjects.mockResolvedValue([
+      { url: 'u-good', etag: 'e1', data: 'BEGIN:VEVENT\r\nUID:good-uid\r\nEND:VEVENT' },
+      { url: 'u-bad', etag: 'e2', data: 'BEGIN:VTODO\r\nSUMMARY:not a VEVENT\r\nEND:VTODO' },
+    ]);
+
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const objects = await listEventObjects(property, new Date('2026-04-01'), new Date('2026-04-30'));
+
+    expect(objects.size).toBe(1);
+    expect(objects.has('good-uid')).toBe(true);
+  });
+
   test('deleteEvent_callsDeleteCalendarObjectWithTheDavObject', async () => {
     const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
     const davObject = { url: 'https://caldav.icloud.com/123/evt-abc.ics', etag: '"etag-1"' };
@@ -165,6 +182,28 @@ describe('icloud', () => {
     mockInstance.deleteCalendarObject.mockRejectedValueOnce(new Error('404 Not Found'));
 
     await expect(deleteEvent(property, davObject)).resolves.not.toThrow();
+  });
+
+  // PR #34 review finding m2: sync.js's events_deleted count must reflect
+  // CONFIRMED deletions, not merely attempted ones.
+  test('deleteEvent_onSuccess_returnsTrue', async () => {
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-abc.ics', etag: '"etag-1"' };
+
+    const result = await deleteEvent(property, davObject);
+
+    expect(result).toBe(true);
+  });
+
+  test('deleteEvent_whenApiCallRejects_returnsFalse', async () => {
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-missing.ics', etag: '"etag-1"' };
+    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
+    mockInstance.deleteCalendarObject.mockRejectedValueOnce(new Error('404 Not Found'));
+
+    const result = await deleteEvent(property, davObject);
+
+    expect(result).toBe(false);
   });
 
   // #33 Task 6: rewriting an already-pushed combined-day event in place
@@ -190,6 +229,53 @@ describe('icloud', () => {
         etag: davObject.etag,
         data: expect.stringContaining('SUMMARY:general waste+food (+food only after transition week)'),
       }),
+    });
+  });
+
+  // PR #34 review finding m2: parity with deleteEvent's success/failure
+  // reporting, so sync.js can count confirmed updates rather than attempts.
+  test('updateEvent_onSuccess_returnsTrue', async () => {
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-combined.ics', etag: '"etag-1"' };
+    const event = { uid: 'evt-combined', summary: 'summary', start: new Date(), end: new Date(), description: '' };
+
+    const result = await updateEvent(property, davObject, event);
+
+    expect(result).toBe(true);
+  });
+
+  // PR #34 review finding m1: updateEvent previously had no error handling
+  // at all, unlike deleteEvent - a transient CalDAV failure (e.g. a 412
+  // etag conflict) would propagate all the way to syncProperty's catch
+  // block and abort every remaining event for that property's sync. Now
+  // matches deleteEvent's swallow-and-log treatment.
+  test('updateEvent_whenApiCallRejects_doesNotThrowAndReturnsFalse', async () => {
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-combined.ics', etag: '"etag-1"' };
+    const event = { uid: 'evt-combined', summary: 'summary', start: new Date(), end: new Date(), description: '' };
+    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
+    mockInstance.updateCalendarObject.mockRejectedValueOnce(new Error('412 Precondition Failed'));
+
+    const result = await updateEvent(property, davObject, event);
+
+    expect(result).toBe(false);
+  });
+
+  // PR #34 review finding M2: lets sync.js check whether an already-pushed
+  // event's remote summary already matches the stripped summary before
+  // writing, so a combined-day event isn't rewritten identically on every
+  // single sync run.
+  describe('extractSummary', () => {
+    test('extractSummary_withSummaryLine_returnsTrimmedSummary', () => {
+      expect(extractSummary('BEGIN:VEVENT\r\nUID:x\r\nSUMMARY:general waste+food (+food only after transition week)\r\nEND:VEVENT')).toBe('general waste+food (+food only after transition week)');
+    });
+
+    test('extractSummary_noSummaryLine_returnsNull', () => {
+      expect(extractSummary('BEGIN:VEVENT\r\nUID:x\r\nEND:VEVENT')).toBeNull();
+    });
+
+    test('extractSummary_undefinedData_returnsNull', () => {
+      expect(extractSummary(undefined)).toBeNull();
     });
   });
 });
