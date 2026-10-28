@@ -875,7 +875,21 @@ async function renderBinTypes() {
   const el = document.getElementById('bin-types-section');
   if (!el) return;
 
+  // PR #34 review finding S3: the bin-type flag is what actually DEFINES
+  // Garden Waste for the whole feature (sync.js reads it to classify/push/
+  // delete) - unlike the property-level opt-in checkbox, it had no
+  // explanatory copy. Reactively warns when no row is flagged at all,
+  // since in that state every property's opt-in toggle is silently inert
+  // - this recomputes on every render (already called again after any
+  // add/edit/delete), so it needs no separate dismiss mechanism.
+  const noRowFlagged = _binTypes.length > 0 && _binTypes.every(bt => !bt.is_garden_waste);
+
   el.innerHTML = `
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">Flag which bin type(s) represent Garden Waste collection in the table below &mdash; this determines which events are hidden from display, withheld from sync, or removed from a calendar for any property that hasn&rsquo;t opted in.</p>
+    ${noRowFlagged ? `
+    <div class="badge badge-warning" style="display:block;margin-bottom:16px;padding:8px 12px;border-radius:6px;font-size:12px">
+      No bin type is flagged as Garden Waste yet &mdash; until one is, every property&rsquo;s Garden Waste opt-in has no effect.
+    </div>` : ''}
     <table class="bin-types-table">
       <thead>
         <tr>

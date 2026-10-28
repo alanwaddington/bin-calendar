@@ -244,6 +244,107 @@ describe('properties.js - Bin Types is_garden_waste flag (#33 Task 7)', () => {
     expect(otherRow.textContent).not.toContain('✓');
   });
 
+  // PR #34 review finding S3: the bin-type flag defines Garden Waste for
+  // the entire feature (it's what sync.js reads to classify/push/delete),
+  // but had zero explanatory copy - unlike the property-level opt-in
+  // checkbox, which has a full sentence of hint text.
+  test('renderBinTypes_alwaysShowsAHintExplainingWhatTheGardenWasteFlagDoes', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 1 },
+      ] },
+      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/determines which events are hidden/i);
+  });
+
+  // If no row is flagged, every property's opt-in toggle is silently
+  // inert - nothing is ever classified as Garden Waste, so opting in or
+  // out does literally nothing. This must be visible, not just true.
+  test('renderBinTypes_whenNoRowIsFlaggedAsGardenWaste_showsInertWarning', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', is_garden_waste: 0 },
+        { id: 2, summary_match: 'Blue', label: 'Recycling', colour: '#3b82f6', is_garden_waste: 0 },
+      ] },
+      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/has no effect/i);
+  });
+
+  test('renderBinTypes_whenAtLeastOneRowIsFlagged_hidesTheInertWarning', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 1 },
+        { id: 2, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', is_garden_waste: 0 },
+      ] },
+      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/has no effect/i);
+  });
+
+  test('renderBinTypes_withNoBinTypesAtAll_doesNotShowTheInertWarning', async () => {
+    // A more fundamental empty state (nothing to flag at all yet) -
+    // distinct from "some exist, none are flagged" - should not trigger
+    // this specific warning.
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [] },
+      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/has no effect/i);
+  });
+
+  // Confirms the warning is reactive to state, not a one-time render -
+  // flagging a row after initial load must make it disappear without a
+  // page reload, since saveBinTypeEdit already calls renderBinTypes()
+  // again on success.
+  test('renderBinTypes_afterFlaggingARowViaEdit_theInertWarningDisappears', async () => {
+    // GET /api/bin-types is re-fetched by renderBinTypes() after the save,
+    // so the mock route must reflect the PUT's effect on the next GET,
+    // like a real server would - a static body here would make this test
+    // pass or fail for the wrong reason.
+    let binTypesState = [{ id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 0 }];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: () => binTypesState },
+      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      { method: 'PUT', url: '/api/bin-types/1', body: () => {
+        binTypesState = [{ ...binTypesState[0], is_garden_waste: 1 }];
+        return { ok: true };
+      } },
+    ]));
+
+    await window.loadSettings();
+    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/has no effect/i);
+
+    window.editBinTypeRow(1);
+    window.document.getElementById('bt-garden-1').checked = true;
+    await window.saveBinTypeEdit(1);
+
+    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/has no effect/i);
+  });
+
   test('saveBinTypeEdit_withGardenWasteCheckboxChecked_persistsIsGardenWasteTrue', async () => {
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
