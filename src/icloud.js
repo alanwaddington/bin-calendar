@@ -21,19 +21,28 @@ async function fetchCalendars(appleId, appPassword) {
   return collections.map(c => ({ displayName: c.displayName, url: c.url }));
 }
 
-async function listEventUids(property, timeMin, timeMax) {
+// #33: deletion needs each object's url/etag (deleteCalendarObject's own
+// requirement), which listEventUids has always discarded after parsing out
+// just the uid. listEventUids is re-expressed in terms of this so both
+// stay in agreement about what counts as "present".
+async function listEventObjects(property, timeMin, timeMax) {
   const creds = decryptJson(property.credentials);
   const client = await createClient(creds);
   const objects = await client.fetchCalendarObjects({
     calendar: { url: property.calendar_id },
     timeRange: { start: timeMin.toISOString(), end: timeMax.toISOString() },
   });
-  const uids = new Set();
+  const byUid = new Map();
   for (const obj of objects) {
     const match = obj.data?.match(/^UID:(.+)$/m);
-    if (match) uids.add(match[1].trim());
+    if (match) byUid.set(match[1].trim(), obj);
   }
-  return uids;
+  return byUid;
+}
+
+async function listEventUids(property, timeMin, timeMax) {
+  const objects = await listEventObjects(property, timeMin, timeMax);
+  return new Set(objects.keys());
 }
 
 async function insertEvent(property, event) {
@@ -60,6 +69,21 @@ async function insertEvent(property, event) {
   });
 }
 
+// #33: deletes a previously-pushed event when a property opts out of
+// Garden Waste. Only the delete call itself is caught - a login/auth
+// failure from createClient still propagates like every other operation
+// here. A per-event delete failure (already removed, transient API error)
+// is logged and swallowed so it never aborts the rest of the sync run.
+async function deleteEvent(property, davObject) {
+  const creds = decryptJson(property.credentials);
+  const client = await createClient(creds);
+  try {
+    await client.deleteCalendarObject({ calendarObject: davObject });
+  } catch (err) {
+    console.error(`Failed to delete iCloud event for property ${property.id}:`, err.message);
+  }
+}
+
 function toIcsDate(date) {
   return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
@@ -75,4 +99,4 @@ async function checkCredentials(property) {
   }
 }
 
-module.exports = { fetchCalendars, listEventUids, insertEvent, checkCredentials };
+module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, deleteEvent, checkCredentials };

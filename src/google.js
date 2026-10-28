@@ -93,6 +93,22 @@ async function insertEvent(property, event) {
   });
 }
 
+// #33: deletes a previously-pushed event when a property opts out of
+// Garden Waste. Only the delete call itself is caught - an auth failure
+// from getAuthenticatedClient still propagates like every other operation
+// here, so syncProperty's existing isAuthError handling still fires. A
+// per-event delete failure (already removed, transient API error) is
+// logged and swallowed so it never aborts the rest of the sync run.
+async function deleteEvent(property, googleEventId) {
+  const auth = await getAuthenticatedClient(property);
+  const calendar = getGoogleApi().calendar({ version: 'v3', auth });
+  try {
+    await calendar.events.delete({ calendarId: property.calendar_id, eventId: googleEventId });
+  } catch (err) {
+    console.error(`Failed to delete Google event ${googleEventId} for property ${property.id}:`, err.message);
+  }
+}
+
 async function checkCredentials(property) {
   if (!property.credentials) return 'unknown';
   try {
@@ -103,4 +119,4 @@ async function checkCredentials(property) {
   }
 }
 
-module.exports = { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars, listEvents, insertEvent, checkCredentials };
+module.exports = { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars, listEvents, insertEvent, deleteEvent, checkCredentials };

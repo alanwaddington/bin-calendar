@@ -5,11 +5,13 @@ jest.mock('tsdav', () => {
   ]);
   const mockFetchCalendarObjects = jest.fn().mockResolvedValue([]);
   const mockCreateCalendarObject = jest.fn().mockResolvedValue(undefined);
+  const mockDeleteCalendarObject = jest.fn().mockResolvedValue(undefined);
   const MockDAVClient = jest.fn().mockImplementation(() => ({
     login: mockLogin,
     fetchCalendars: mockFetchCalendars,
     fetchCalendarObjects: mockFetchCalendarObjects,
     createCalendarObject: mockCreateCalendarObject,
+    deleteCalendarObject: mockDeleteCalendarObject,
   }));
   return { DAVClient: MockDAVClient };
 });
@@ -20,7 +22,7 @@ jest.mock('../../src/crypto', () => ({
 
 const { DAVClient } = require('tsdav');
 const { decryptJson } = require('../../src/crypto');
-const { fetchCalendars, listEventUids, insertEvent } = require('../../src/icloud');
+const { fetchCalendars, listEventUids, insertEvent, listEventObjects, deleteEvent } = require('../../src/icloud');
 
 describe('icloud', () => {
   beforeEach(() => {
@@ -111,5 +113,55 @@ describe('icloud', () => {
     const lastInstance = DAVClient.mock.results[DAVClient.mock.results.length - 1].value;
     const call = lastInstance.createCalendarObject.mock.calls[0][0];
     expect(call.iCalString).not.toContain('DESCRIPTION:');
+  });
+
+  // #33 Task 4: deletion needs the dav object's url/etag, which
+  // listEventUids has always discarded after parsing out the uid.
+  test('listEventObjects_withMatchingObjects_returnsMapOfUidToDavObjectPreservingUrlAndEtag', async () => {
+    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-abc.ics', etag: '"etag-1"', data: 'BEGIN:VEVENT\r\nUID:abc123\r\nEND:VEVENT' };
+    mockInstance.fetchCalendarObjects.mockResolvedValue([davObject]);
+
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const objects = await listEventObjects(property, new Date('2026-04-01'), new Date('2026-04-30'));
+
+    expect(objects).toBeInstanceOf(Map);
+    expect(objects.get('abc123')).toBe(davObject);
+  });
+
+  // listEventUids must keep working exactly as before - re-expressed in
+  // terms of listEventObjects, but existing callers are unaffected.
+  test('listEventUids_stillReturnsUidSet_whenReExpressedInTermsOfListEventObjects', async () => {
+    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
+    mockInstance.fetchCalendarObjects.mockResolvedValue([
+      { url: 'u1', etag: 'e1', data: 'BEGIN:VEVENT\r\nUID:xyz789\r\nEND:VEVENT' },
+    ]);
+
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const uids = await listEventUids(property, new Date('2026-04-01'), new Date('2026-04-30'));
+
+    expect(uids).toBeInstanceOf(Set);
+    expect(uids.has('xyz789')).toBe(true);
+  });
+
+  test('deleteEvent_callsDeleteCalendarObjectWithTheDavObject', async () => {
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-abc.ics', etag: '"etag-1"' };
+
+    await deleteEvent(property, davObject);
+
+    const lastInstance = DAVClient.mock.results[DAVClient.mock.results.length - 1].value;
+    expect(lastInstance.deleteCalendarObject).toHaveBeenCalledWith({ calendarObject: davObject });
+  });
+
+  // A single event's delete failing must never abort the rest of the sync
+  // run - caught and logged here rather than propagated.
+  test('deleteEvent_whenApiCallRejects_doesNotThrow', async () => {
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-missing.ics', etag: '"etag-1"' };
+    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
+    mockInstance.deleteCalendarObject.mockRejectedValueOnce(new Error('404 Not Found'));
+
+    await expect(deleteEvent(property, davObject)).resolves.not.toThrow();
   });
 });

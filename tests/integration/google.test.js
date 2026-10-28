@@ -12,11 +12,12 @@ jest.mock('googleapis', () => {
   }));
   const mockEventsImport = jest.fn().mockResolvedValue({});
   const mockEventsList = jest.fn().mockResolvedValue({ data: { items: [] } });
+  const mockEventsDelete = jest.fn().mockResolvedValue({});
   const mockCalendarListList = jest.fn().mockResolvedValue({
     data: { items: [{ id: 'primary', summary: 'My Calendar', primary: true }] },
   });
   const mockCalendar = jest.fn().mockReturnValue({
-    events: { import: mockEventsImport, list: mockEventsList },
+    events: { import: mockEventsImport, list: mockEventsList, delete: mockEventsDelete },
     calendarList: { list: mockCalendarListList },
   });
   return {
@@ -182,5 +183,31 @@ describe('google', () => {
     const property = { id: 1, credentials: 'encrypted', calendar_id: 'primary' };
     const result = await listEvents(property, new Date('2026-04-01'), new Date('2026-04-30'));
     expect(result).toEqual([]);
+  });
+
+  // #33 Task 4: deleting an already-pushed garden-waste event on opt-out.
+  test('deleteEvent_callsCalendarEventsDeleteWithCalendarIdAndEventId', async () => {
+    const { deleteEvent } = require('../../src/google');
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'primary' };
+
+    await deleteEvent(property, 'google-event-id-123');
+
+    const mockCalendar = google.calendar();
+    expect(mockCalendar.events.delete).toHaveBeenCalledWith({
+      calendarId: 'primary',
+      eventId: 'google-event-id-123',
+    });
+  });
+
+  // A single event's delete failing (already removed, transient API error,
+  // etc.) must never abort the rest of the sync run - it's caught and
+  // logged here rather than propagated.
+  test('deleteEvent_whenApiCallRejects_doesNotThrow', async () => {
+    const { deleteEvent } = require('../../src/google');
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'primary' };
+    const mockCalendar = google.calendar();
+    mockCalendar.events.delete.mockRejectedValueOnce(new Error('Not Found'));
+
+    await expect(deleteEvent(property, 'missing-event-id')).resolves.not.toThrow();
   });
 });
