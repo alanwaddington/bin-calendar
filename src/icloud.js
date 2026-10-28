@@ -45,10 +45,8 @@ async function listEventUids(property, timeMin, timeMax) {
   return new Set(objects.keys());
 }
 
-async function insertEvent(property, event) {
-  const creds = decryptJson(property.credentials);
-  const client = await createClient(creds);
-  const vcalendar = [
+function buildVCalendarString(event) {
+  return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//bin-calendar//EN',
@@ -61,11 +59,29 @@ async function insertEvent(property, event) {
     'END:VEVENT',
     'END:VCALENDAR',
   ].filter(Boolean).join('\r\n');
+}
 
+async function insertEvent(property, event) {
+  const creds = decryptJson(property.credentials);
+  const client = await createClient(creds);
   await client.createCalendarObject({
     calendar: { url: property.calendar_id },
     filename: `${event.uid}.ics`,
-    iCalString: vcalendar,
+    iCalString: buildVCalendarString(event),
+  });
+}
+
+// #33 Task 6: rewrites an already-pushed event in place (e.g. a combined
+// day's summary with its garden-waste segment now stripped out) rather
+// than deleting and reinserting - which would lose the non-garden-waste
+// half for however long the delete and the next sync's re-push are apart.
+// Needs the dav object's own url/etag (from listEventObjects), which is
+// exactly what updateCalendarObject's optimistic-concurrency check requires.
+async function updateEvent(property, davObject, event) {
+  const creds = decryptJson(property.credentials);
+  const client = await createClient(creds);
+  await client.updateCalendarObject({
+    calendarObject: { url: davObject.url, etag: davObject.etag, data: buildVCalendarString(event) },
   });
 }
 
@@ -99,4 +115,4 @@ async function checkCredentials(property) {
   }
 }
 
-module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, deleteEvent, checkCredentials };
+module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, updateEvent, deleteEvent, checkCredentials };

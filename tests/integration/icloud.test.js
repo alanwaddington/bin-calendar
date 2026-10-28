@@ -6,12 +6,14 @@ jest.mock('tsdav', () => {
   const mockFetchCalendarObjects = jest.fn().mockResolvedValue([]);
   const mockCreateCalendarObject = jest.fn().mockResolvedValue(undefined);
   const mockDeleteCalendarObject = jest.fn().mockResolvedValue(undefined);
+  const mockUpdateCalendarObject = jest.fn().mockResolvedValue(undefined);
   const MockDAVClient = jest.fn().mockImplementation(() => ({
     login: mockLogin,
     fetchCalendars: mockFetchCalendars,
     fetchCalendarObjects: mockFetchCalendarObjects,
     createCalendarObject: mockCreateCalendarObject,
     deleteCalendarObject: mockDeleteCalendarObject,
+    updateCalendarObject: mockUpdateCalendarObject,
   }));
   return { DAVClient: MockDAVClient };
 });
@@ -22,7 +24,7 @@ jest.mock('../../src/crypto', () => ({
 
 const { DAVClient } = require('tsdav');
 const { decryptJson } = require('../../src/crypto');
-const { fetchCalendars, listEventUids, insertEvent, listEventObjects, deleteEvent } = require('../../src/icloud');
+const { fetchCalendars, listEventUids, insertEvent, listEventObjects, deleteEvent, updateEvent } = require('../../src/icloud');
 
 describe('icloud', () => {
   beforeEach(() => {
@@ -163,5 +165,31 @@ describe('icloud', () => {
     mockInstance.deleteCalendarObject.mockRejectedValueOnce(new Error('404 Not Found'));
 
     await expect(deleteEvent(property, davObject)).resolves.not.toThrow();
+  });
+
+  // #33 Task 6: rewriting an already-pushed combined-day event in place
+  // (garden-waste segment now stripped out) rather than deleting and
+  // reinserting it.
+  test('updateEvent_callsUpdateCalendarObjectWithTheExistingUrlAndEtagAndNewIcsData', async () => {
+    const property = { id: 1, credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const davObject = { url: 'https://caldav.icloud.com/123/evt-combined.ics', etag: '"etag-1"' };
+    const event = {
+      uid: 'evt-combined',
+      summary: 'general waste+food (+food only after transition week)',
+      start: new Date('2026-04-01T07:00:00Z'),
+      end: new Date('2026-04-01T08:00:00Z'),
+      description: '',
+    };
+
+    await updateEvent(property, davObject, event);
+
+    const lastInstance = DAVClient.mock.results[DAVClient.mock.results.length - 1].value;
+    expect(lastInstance.updateCalendarObject).toHaveBeenCalledWith({
+      calendarObject: expect.objectContaining({
+        url: davObject.url,
+        etag: davObject.etag,
+        data: expect.stringContaining('SUMMARY:general waste+food (+food only after transition week)'),
+      }),
+    });
   });
 });

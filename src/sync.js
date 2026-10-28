@@ -109,13 +109,15 @@ async function syncProperty(db, runId, property) {
 
     let added = 0, skipped = 0, deleted = 0;
     for (const event of events) {
-      // A combined day (e.g. "Garden waste and general waste+food (...)")
-      // is deliberately left alone here - stripping just the garden-waste
-      // segment from an already-pushed combined event is handled
-      // separately (Task 6), so it still falls through to the normal
-      // push/skip path below, unchanged, for now.
-      const isPureGardenWaste = isGardenWaste(event.summary, gardenMatchers)
-        && stripGardenWasteSegments(event.summary, gardenMatchers) === '';
+      const strippedSummary = stripGardenWasteSegments(event.summary, gardenMatchers);
+      const isGarden = isGardenWaste(event.summary, gardenMatchers);
+      const isPureGardenWaste = isGarden && strippedSummary === '';
+      // A combined day whose garden-waste segment, once removed, still
+      // leaves something behind (e.g. "Garden waste and general
+      // waste+food (...)" -> "general waste+food (...)") - distinct from
+      // pure garden waste (stripped to nothing) and from an ordinary
+      // non-garden event (stripping changes nothing).
+      const isCombinedWithGardenWaste = isGarden && strippedSummary !== '' && strippedSummary !== event.summary;
 
       if (!property.garden_waste_opted_in && isPureGardenWaste) {
         if (existingByUid.has(event.uid)) {
@@ -126,6 +128,35 @@ async function syncProperty(db, runId, property) {
             await icloud.deleteEvent(property, identifier);
           }
           deleted++;
+        }
+        continue;
+      }
+
+      if (!property.garden_waste_opted_in && isCombinedWithGardenWaste) {
+        const strippedEvent = { ...event, summary: strippedSummary };
+        if (existingByUid.has(event.uid)) {
+          // #33 Task 6: rewrite in place rather than delete-and-reinsert,
+          // which would lose the non-garden-waste half for however long
+          // the delete and the next sync's re-push are apart. Only
+          // attempted for iCloud, where tsdav's updateCalendarObject gives
+          // an explicit, documented update path. Google's events.import
+          // has no documented behaviour for re-importing an existing
+          // iCalUID, so re-pushing it here could just as easily create a
+          // duplicate as update it - left unchanged as a documented
+          // limitation rather than risk that or an incorrect delete.
+          if (property.calendar_type === 'icloud') {
+            await icloud.updateEvent(property, existingByUid.get(event.uid), strippedEvent);
+            added++;
+          } else {
+            skipped++;
+          }
+        } else {
+          if (property.calendar_type === 'google') {
+            await google.insertEvent(property, strippedEvent);
+          } else {
+            await icloud.insertEvent(property, strippedEvent);
+          }
+          added++;
         }
         continue;
       }
