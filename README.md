@@ -219,8 +219,11 @@ tests/
 │   ├── google-credentials.test.js
 │   ├── icloud-credentials.test.js
 │   ├── sync-cache.test.js
-│   ├── calendar-events.test.js    # GET /api/properties/:id/events against a real DB
-│   └── calendar-frontend.test.js  # public/calendar.js via browserDom.js
+│   ├── calendar-events.test.js            # GET /api/properties/:id/events against a real DB
+│   ├── calendar-frontend.test.js          # public/calendar.js via browserDom.js
+│   ├── dashboard-frontend.test.js         # public/dashboard.js via browserDom.js
+│   ├── format-matched-label.test.js       # bin-type label vs. raw summary formatting
+│   └── attribute-summary-segment.test.js  # "X and Y"-combined summary -> per-match segment
 ├── integration/
 │   ├── sync.test.js
 │   ├── google.test.js

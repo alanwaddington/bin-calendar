@@ -487,7 +487,7 @@ describe('server API', () => {
     expect(res.body.events).toEqual([]);
   });
 
-  test('getPropertyEvents_withMultipleBinTypeMatches_returnsSingleMarkerPerEvent', async () => {
+  test('getPropertyEvents_withMatchedSummaryMoreSpecificThanLabel_returnsRawSummaryAlone', async () => {
     mockPrepare.get.mockReturnValueOnce({ id: 1 });
     mockPrepare.all.mockReturnValueOnce([
       {
@@ -504,9 +504,22 @@ describe('server API', () => {
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(1);
     expect(res.body.events[0].label).toBe('General waste+food');
+  });
+
+  // A summary matching multiple bin_types rules shows one marker per match
+  // (e.g. East Ayrshire's real "Garden waste and general waste+food..."
+  // combining two genuinely separate collections into one VEVENT) - a
+  // fan-out join, not the single-lowest-id-match subquery used elsewhere
+  // for collapsing an AMBIGUOUS single match (see getPropertyEventsRows
+  // real-DB tests for the full real-world case).
+  test('getPropertyEvents_sqlUsesFanOutJoinNotSingleMatchSubquery', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/properties/1/events');
 
     const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
-    expect(eventsSql).toMatch(/LIMIT 1/i);
+    expect(eventsSql).toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+    expect(eventsSql).not.toMatch(/LIMIT 1/i);
   });
 
   test('getPropertyEvents_withNoBinTypeMatch_returnsRawSummaryAndNeutralColour', async () => {
@@ -613,6 +626,57 @@ describe('server API', () => {
     expect(res.body.collections).toHaveLength(0);
   });
 
+  // East Ayrshire's real feed sends "Transition week" as a single VEVENT
+  // spanning DTSTART=Mon..DTEND=Sat (ICS DTEND exclusive -> Mon-Fri
+  // covered) rather than five separate VEVENTs. next-collection must
+  // recompute daysUntil per expanded day rather than reusing the
+  // SQL-computed value for the event's original start_date.
+  test('getNextCollection_withMultiDaySpanEventStartingToday_showsDayZeroOfTheSpan', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-02',
+        endDate: '2026-04-07', // spans Apr 2,3,4,5,6
+        days_until: 0,
+        summary: 'Transition week',
+        label: null,
+        colour: null,
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0]).toMatchObject({ date: '2026-04-02', daysUntil: 0 });
+  });
+
+  test('getNextCollection_withMultiDaySpanEventAlreadyInProgress_showsTodaysDayOfTheSpanNotTheStart', async () => {
+    // The span started 2 days ago (days_until: -2 for its start_date) but
+    // is still ongoing - the event must still surface, dated and
+    // days-until'd for TODAY (the correct point within the span), not
+    // silently disappear once its start_date is in the past.
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-04-01', // started 2 days before "now" in SQL's own days_until terms
+        endDate: '2026-04-06', // spans Apr 1,2,3,4,5 -> today (days_until 0) is Apr 3
+        days_until: -2,
+        summary: 'Transition week',
+        label: null,
+        colour: null,
+        property_id: 1,
+        property_label: '12 Main St',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.status).toBe(200);
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0]).toMatchObject({ date: '2026-04-03', daysUntil: 0 });
+  });
+
   test('getNextCollection_withNoBinTypeMatch_returnsRawSummaryAndNeutralColour', async () => {
     mockPrepare.all.mockReturnValueOnce([
       {
@@ -676,19 +740,80 @@ describe('server API', () => {
     expect(res.body.collections[0].rawLabel).toBe('Purple Bin Collection');
   });
 
-  // PR #27 review finding M2: /api/next-collection used a fan-out
-  // `LIKE` join (one row per matching bin_types rule) while
-  // getPropertyEventsRows used a de-duplicating correlated subquery - the
-  // two endpoints disagreed about how many rows one event produces. This
-  // brings next-collection onto the same lowest-id-wins subquery.
-  test('getNextCollection_sqlUsesSameDeduplicatingSubqueryAsPropertyEvents', async () => {
+  // next-collection and getPropertyEventsRows must agree on how many rows
+  // one event produces when its summary matches multiple bin_types rules -
+  // both now fan out (one row per match), rather than one deduplicating and
+  // the other not (PR #27 review finding M2 was exactly that mismatch, the
+  // other direction).
+  test('getNextCollection_sqlUsesSameFanOutJoinAsPropertyEvents', async () => {
     mockPrepare.all.mockReturnValueOnce([]);
 
     await request(app).get('/api/next-collection');
 
     const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
-    expect(sql).toMatch(/LIMIT 1/i);
-    expect(sql).not.toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+    expect(sql).toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+    expect(sql).not.toMatch(/LIMIT 1/i);
+  });
+
+  // The same real-world "X and Y" combined summary from
+  // calendar-events.test.js, exercised through next-collection's own
+  // separate query/mapping - the "+food only after transition week"
+  // qualifier belongs only to the General Waste half.
+  test('getNextCollection_withRealWorldAndCombinedSummary_attributesEachMatchToItsOwnSegment', async () => {
+    const summary = 'Garden waste and general waste+food (+food only after transition week)';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'waste+food', property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    const garden = res.body.collections.find(c => c.colour === '#92400e');
+    const general = res.body.collections.find(c => c.colour === '#6b7280');
+    expect(garden.label).toBe('Garden Waste');
+    expect(general.label).toBe('general waste+food (+food only after transition week)');
+  });
+
+  // PR #31 review finding M1: two bin_types rules sharing a label and
+  // colour, both matching the same summary, must collapse to one
+  // collection - not render as two indistinguishable duplicates (which
+  // would also disagree with the Calendar page's own dedup).
+  test('getNextCollection_withTwoRulesSharingLabelAndColour_collapsesToOneCollection', async () => {
+    const summary = 'Trolley+food';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-10-29', endDate: null, days_until: 1, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Trolley', property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-10-29', endDate: null, days_until: 1, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'food', property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].label).toBe('General Waste (Trolley+food)');
+  });
+
+  // A span event whose start_date has already passed must still be found by
+  // the WHERE clause as long as it's still ongoing (end_date still in the
+  // future) - otherwise it would silently vanish from next-collection
+  // partway through, even though it's still the current collection.
+  test('getNextCollection_sqlIncludesStillOngoingSpanEventsNotJustFutureStartDates', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/next-collection');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
+    expect(sql).toMatch(/e\.end_date\s+IS\s+NOT\s+NULL\s+AND\s+e\.end_date\s*>\s*date\('now'\)/i);
   });
 
   // --- GET /api/bin-types ---
