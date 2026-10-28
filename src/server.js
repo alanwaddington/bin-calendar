@@ -9,6 +9,7 @@ const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require(
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
 const { checkSingleCredential } = require('./credential-check');
+const { matchesOutsideParentheses, splitSummarySegments } = require('./bin-types');
 
 const app = express();
 app.use(express.json());
@@ -120,20 +121,6 @@ function formatMatchedLabel(label, summary) {
   return `${label} (${summary})`;
 }
 
-// East Ayrshire sometimes combines several collections into one VEVENT by
-// literally concatenating each one's own standalone summary with " and "
-// (verified against the real feed: "Garden waste and general waste+food
-// (+food only after transition week)" is exactly "Garden waste" + " and " +
-// "general waste+food (+food only after transition week)" - both halves
-// appear verbatim elsewhere in the same feed as standalone single-day
-// entries). Splitting on that joiner lets each matched bin type be labelled
-// from just its own segment, so a qualifier that only applies to one
-// collection (e.g. "+food only after transition week") doesn't leak onto
-// every bin type collected that day.
-function splitSummarySegments(summary) {
-  return summary.split(/\s+and\s+/i).map(s => s.trim()).filter(Boolean);
-}
-
 // Finds which segment of a (possibly "X and Y"-combined) summary a specific
 // bin_types match actually belongs to, so formatMatchedLabel only sees the
 // text relevant to THAT match. Falls back to the whole summary when there's
@@ -159,17 +146,6 @@ function attributeSummarySegment(summary, matchText) {
 // so they agree on how many rows one event produces.
 const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'`;
 
-// Parenthetical text in this feed is always an explanatory caveat attached
-// to a DIFFERENT collection (e.g. "(+food only after transition week)" on
-// a General Waste day) - never an announcement of its own, separate
-// collection. A genuinely combined day is always joined with "and" instead
-// (see attributeSummarySegment above). So a word that only appears inside
-// parentheses must never, on its own, trigger a bin_types match - verified
-// against every real summary fetched this session.
-function stripParentheticals(text) {
-  return text.replace(/\([^()]*\)/g, '');
-}
-
 // The fan-out join above matches against the whole summary, parentheses
 // included - so a bin_types rule whose Match text happens to appear only
 // inside someone else's caveat (real-world case: a "Transition Week" rule
@@ -192,7 +168,7 @@ function excludeParenthesesOnlyMatches(rows) {
   const result = [];
   for (const group of byUid.values()) {
     const kept = group.filter(r =>
-      !r.binTypeMatch || stripParentheticals(r.summary).toLowerCase().includes(r.binTypeMatch.toLowerCase())
+      !r.binTypeMatch || matchesOutsideParentheses(r.summary, r.binTypeMatch)
     );
     if (kept.length > 0) {
       result.push(...kept);
