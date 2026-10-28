@@ -9,20 +9,22 @@
 
 ## Findings Resolution (post-review)
 
-**S1 fixed** at the user's explicit request; **M1, M2, S2 not yet addressed** — the user asked specifically for S1, not "fix all findings," so those remain open.
+**All findings fixed**, regardless of severity, per explicit user instruction. S1 was fixed first at a specific request before the user asked for the remainder.
 
 | Finding | Outcome | Commit |
 |---|---|---|
 | S1 (duplicated full summary on every fan-out marker) | **Fixed** — added `splitSummarySegments()`/`attributeSummarySegment()` (`src/server.js:115-138`); each fan-out row's label is now computed from just its own segment of an "X and Y"-combined summary, not the whole string. Both `SELECT`s now also fetch `bt.summary_match` so each row knows which segment it owns (`:195`, `:376`) | `e2a7098` |
-| M1 (byte-for-byte duplicate markers, same-label rules) | Not addressed | — |
-| M2 (unbounded `end_date` → 355k-row expansion) | Not addressed | — |
-| S2 (no test for compound span × fan-out) | Not addressed | — |
+| M1 (byte-for-byte duplicate markers, same-label rules) | **Fixed** — added `dedupeIdenticalRows()`, applied to both endpoints' final output (keyed on `uid|date|label|colour` for `getPropertyEventsRows`, `propertyId|date|label|colour` for `next-collection`, which never exposed `uid`). Scoped narrowly: two *different* bin types matching one summary still both render; only byte-for-byte duplicates collapse | `ef92ecf` |
+| M2 (unbounded `end_date` → 355k-row expansion) | **Fixed at both layers** — `sync.js`'s `cacheEvents` now validates `end_date` the same way it already validated `start_date` (rejecting anything not a real forward span, or further than 31 days out); `expandDateRange` independently clamps to the same 31-day bound as defense in depth, regardless of how a bad value might reach the table | `ef92ecf` |
+| S2 (no test for compound span × fan-out) | **Fixed** — added a real-DB test asserting a 3-day span matching 2 bin_types rules produces `3 × 2 = 6` correctly-ordered rows, rather than relying on the review's own live verification as the only evidence | `ef92ecf` |
 
-**Verified against the real feed, not just the recommendation's hypothetical:** confirmed the "X and Y" summary is always a literal concatenation of two complete standalone summaries with `" and "` — both halves of the real example appear verbatim elsewhere in the same feed as their own single-day entries, and the `+food only after transition week` qualifier never appears near a standalone `Garden waste` entry. That let the fix be exact rather than heuristic. Confirmed live: `GET /api/properties/:id/events` now returns `label: "Garden Waste"` (no qualifier) and `label: "general waste+food (+food only after transition week)"` (keeps its own qualifier) as two separate rows for the real Nov 26 event, and a real Chromium screenshot of the Calendar page shows the same.
+**S1 verified against the real feed, not just the recommendation's hypothetical:** confirmed the "X and Y" summary is always a literal concatenation of two complete standalone summaries with `" and "` — both halves of the real example appear verbatim elsewhere in the same feed as their own single-day entries, and the `+food only after transition week` qualifier never appears near a standalone `Garden waste` entry. That let the fix be exact rather than heuristic. Confirmed live: `GET /api/properties/:id/events` now returns `label: "Garden Waste"` (no qualifier) and `label: "general waste+food (+food only after transition week)"` (keeps its own qualifier) as two separate rows for the real Nov 26 event, and a real Chromium screenshot of the Calendar page shows the same.
 
-The implemented fix goes slightly beyond S1's own recommendation text (which suggested showing just each match's bare `bin_types.label`, dropping the caveat entirely) — segment-attribution keeps the caveat on the half it actually belongs to instead of discarding it, which better satisfies the "never lose information" principle S1 itself flagged as being in tension with the simpler recommendation.
+The implemented S1 fix goes slightly beyond S1's own recommendation text (which suggested showing just each match's bare `bin_types.label`, dropping the caveat entirely) — segment-attribution keeps the caveat on the half it actually belongs to instead of discarding it, which better satisfies the "never lose information" principle S1 itself flagged as being in tension with the simpler recommendation.
 
-Re-verified after the fix: 249/249 tests passing (was 241/241 — 8 new), 0 lint errors/warnings, same coverage profile.
+**M1/M2 re-verified live on a fresh server**, using the review's own reproduction scenarios, not just the unit tests: `Trolley+food` against two same-label/colour `bin_types` rules now returns exactly 1 row (was 2), confirmed via both the API and a real Chromium screenshot (1 marker in the DOM, not 2). The malformed `2999-01-01` end_date case now returns 31 rows in 9ms instead of 355,077 rows / 47MB in ~500ms, and `cacheEvents` was independently confirmed to null a corrupt 900-year-future end_date before it ever reaches the database — the display-side clamp and the sync-side validation were each verified separately, not assumed to cover each other.
+
+Re-verified after all fixes: 258/258 tests passing (was 241/241 at the original review — 17 new), 0 lint errors/warnings, coverage improved slightly (96.99% from 96.91%).
 
 ---
 
