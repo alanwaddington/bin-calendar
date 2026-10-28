@@ -33,9 +33,12 @@ describe('formatMatchedLabel', () => {
     expect(formatMatchedLabel('Garden Waste', 'Garden waste')).toBe('Garden Waste');
   });
 
-  test('formatMatchedLabel_transitionalCaveatSummaryContainsLabel_returnsRawSummaryAlone', () => {
-    expect(formatMatchedLabel('General Waste', 'General waste+food (+food only after transition week)'))
-      .toBe('General waste+food (+food only after transition week)');
+  // Every other bin type's "feed is more specific" case just appends
+  // "+food" (see Trolley above) - General Waste is no different, it just
+  // happens to be lowercase in the feed ("waste" not "Waste"), which is
+  // exactly what the case-insensitive containment check exists to handle.
+  test('formatMatchedLabel_summaryAddsQualifierCaseInsensitively_returnsRawSummaryAlone', () => {
+    expect(formatMatchedLabel('General Waste', 'General waste+food')).toBe('General waste+food');
   });
 
   test('formatMatchedLabel_summaryNeitherEqualNorContainsLabel_appendsRawSummaryInParens', () => {

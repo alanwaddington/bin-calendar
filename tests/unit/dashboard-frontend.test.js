@@ -51,7 +51,7 @@ describe('dashboard.js hero card rendering', () => {
   // when visually truncated) rather than silently clipping with no way to
   // see what was cut off.
   test('renderHeroCard_longLabel_exposesFullTextViaTitleAttribute', async () => {
-    const longLabel = 'General waste+food (+food only after transition week, please check the council website for exact dates)';
+    const longLabel = 'General Waste (Trolley, Garden Waste, Food Waste and Recycling all collected together this week due to a schedule change)';
     const window = createCalendarWindow(mockFetch([
       ['/api/next-collection', { collections: [
         { date: '2026-11-05', daysUntil: 0, summary: longLabel, label: longLabel, rawLabel: longLabel, colour: '#6b7280', propertyId: 1, propertyLabel: 'Home' },
