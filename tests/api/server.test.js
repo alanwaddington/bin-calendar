@@ -188,6 +188,69 @@ describe('server API', () => {
     expect(res.body.error).toMatch(/Invalid ICS URL/i);
   });
 
+  // --- #33 Task 1: garden_waste_opted_in / is_garden_waste plumbing ---
+
+  test('GET /api/properties selects garden_waste_opted_in', async () => {
+    await request(app).get('/api/properties');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('FROM properties'));
+    expect(sql).toMatch(/garden_waste_opted_in/);
+  });
+
+  test('POST /api/properties with garden_waste_opted_in true persists 1', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', garden_waste_opted_in: true });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(insertCall).toContain(1);
+  });
+
+  test('POST /api/properties without garden_waste_opted_in defaults to 0', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(insertCall).toContain(0);
+  });
+
+  test('POST /api/properties with garden_waste_opted_in as string "false" coerces to 0, never 500s', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', garden_waste_opted_in: 'false' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(insertCall).toContain(0);
+  });
+
+  test('PUT /api/properties/:id with garden_waste_opted_in persists it', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', garden_waste_opted_in: true });
+
+    expect(res.status).toBe(200);
+    const updateSql = mockPrepare.run.mock.calls.length
+      ? getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('UPDATE properties'))
+      : null;
+    expect(updateSql).toMatch(/garden_waste_opted_in/);
+    const updateCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(updateCall).toContain(1);
+  });
+
+  test('PUT /api/properties/:id without garden_waste_opted_in leaves the column untouched (preserves existing value)', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics' });
+
+    expect(res.status).toBe(200);
+    const updateSql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('UPDATE properties'));
+    expect(updateSql).not.toMatch(/garden_waste_opted_in/);
+  });
+
   test('GET /api/google/auth-url/:propertyId returns auth URL when configured', async () => {
     isGoogleConfigured.mockReturnValue(true);
     getAuthUrl.mockReturnValue('https://accounts.google.com/auth?state=test');
@@ -905,6 +968,40 @@ describe('server API', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.summary_match).toBe('Grey');
+  });
+
+  // --- #33 Task 1: is_garden_waste plumbing ---
+
+  test('postBinType_withIsGardenWasteTrue_persists1', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: true });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Garden'));
+    expect(insertCall).toContain(1);
+  });
+
+  test('postBinType_withoutIsGardenWaste_defaultsTo0', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Grey'));
+    expect(insertCall).toContain(0);
+  });
+
+  test('putBinType_withIsGardenWasteTrue_persists1', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 1 });
+
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: true });
+
+    expect(res.status).toBe(200);
+    const updateCall = mockPrepare.run.mock.calls.find(args => args.includes('Garden'));
+    expect(updateCall).toContain(1);
   });
 
   test('postBinType_withDuplicateSummaryMatch_returns409WithJsonError', async () => {

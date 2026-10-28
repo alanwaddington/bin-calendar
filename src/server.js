@@ -35,7 +35,7 @@ app.get('/api/config', (req, res) => {
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
   const rows = getDb().prepare(
-    'SELECT id, label, ics_url, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
+    'SELECT id, label, ics_url, calendar_type, calendar_id, garden_waste_opted_in, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
   ).all();
   res.json(rows);
 });
@@ -44,21 +44,39 @@ function isValidIcsUrl(url) {
   return typeof url === 'string' && (url.startsWith('https://') || url.startsWith('webcal://'));
 }
 
+// Coerces a client-supplied opt-in value to a clean SQLite-storable 0/1.
+// Only an explicit true/1/'1'/'true' counts as opted-in - everything else
+// (including the classic 'false' string footgun, which plain JS truthiness
+// would get wrong) coerces to 0, never throws, so a malformed body can
+// never 500 here.
+function toBoolInt(value) {
+  return value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
+}
+
 app.post('/api/properties', (req, res) => {
-  const { label, ics_url, calendar_type } = req.body;
+  const { label, ics_url, calendar_type, garden_waste_opted_in } = req.body;
   if (!label || !ics_url || !calendar_type) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
   const result = getDb().prepare(
-    'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id) VALUES (?, ?, ?, ?, ?)'
-  ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null);
+    'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id, garden_waste_opted_in) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null, toBoolInt(garden_waste_opted_in));
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/properties/:id', (req, res) => {
-  const { label, ics_url } = req.body;
+  const { label, ics_url, garden_waste_opted_in } = req.body;
   if (!label || !ics_url) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
-  getDb().prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+  // garden_waste_opted_in is only touched when the caller actually sends it
+  // - omitting it must preserve whatever the property is already set to,
+  // not reset it to a default (unlike POST, where there's no prior value
+  // to preserve).
+  if (garden_waste_opted_in === undefined) {
+    getDb().prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+  } else {
+    getDb().prepare('UPDATE properties SET label = ?, ics_url = ?, garden_waste_opted_in = ? WHERE id = ?')
+      .run(label, ics_url, toBoolInt(garden_waste_opted_in), req.params.id);
+  }
   res.json({ ok: true });
 });
 
@@ -473,10 +491,10 @@ app.get('/api/bin-types', (req, res) => {
 const HEX_COLOUR_RE = /^#[0-9a-fA-F]{6}$/;
 
 function sanitiseBinTypeInput(body) {
-  const { summary_match, label, colour } = body;
+  const { summary_match, label, colour, is_garden_waste } = body;
   if (!summary_match || !label || !colour) return { error: 'Missing fields: summary_match, label, colour required' };
   if (!HEX_COLOUR_RE.test(colour)) return { error: 'Invalid colour: must be a 6-digit hex value (e.g. #6b7280)' };
-  return { summary_match: summary_match.replace(/[%_]/g, ''), label, colour };
+  return { summary_match: summary_match.replace(/[%_]/g, ''), label, colour, is_garden_waste: toBoolInt(is_garden_waste) };
 }
 
 app.post('/api/bin-types', (req, res) => {
@@ -484,9 +502,9 @@ app.post('/api/bin-types', (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   try {
     const result = getDb().prepare(
-      'INSERT INTO bin_types (summary_match, label, colour) VALUES (?, ?, ?)'
-    ).run(input.summary_match, input.label, input.colour);
-    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour });
+      'INSERT INTO bin_types (summary_match, label, colour, is_garden_waste) VALUES (?, ?, ?, ?)'
+    ).run(input.summary_match, input.label, input.colour, input.is_garden_waste);
+    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour, is_garden_waste: input.is_garden_waste });
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'A bin type with that match text already exists' });
@@ -500,8 +518,8 @@ app.put('/api/bin-types/:id', (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   try {
     const result = getDb().prepare(
-      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ? WHERE id = ?'
-    ).run(input.summary_match, input.label, input.colour, req.params.id);
+      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ?, is_garden_waste = ? WHERE id = ?'
+    ).run(input.summary_match, input.label, input.colour, input.is_garden_waste, req.params.id);
     if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
     res.json({ ok: true });
   } catch (err) {

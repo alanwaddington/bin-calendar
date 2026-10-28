@@ -168,4 +168,25 @@ describe('db', () => {
     expect(row).toBeDefined();
     expect(row.updated_at).toBeTruthy();
   });
+
+  test('initDb_migration006_addsGardenWasteOptedInToProperties', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const result = db.prepare(
+      "INSERT INTO properties (label, uprn, calendar_type) VALUES ('Home', '12345', 'google')"
+    ).run();
+    const row = db.prepare('SELECT garden_waste_opted_in FROM properties WHERE id = ?').get(result.lastInsertRowid);
+    expect(row.garden_waste_opted_in).toBe(0);
+  });
+
+  test('initDb_migration006_addsIsGardenWasteToBinTypes', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    // 'Grey' is one of the default-seeded bin_types rows (003.sql) - must
+    // come out not flagged as garden waste by default.
+    const row = db.prepare("SELECT is_garden_waste FROM bin_types WHERE summary_match = 'Grey'").get();
+    expect(row.is_garden_waste).toBe(0);
+  });
 });
