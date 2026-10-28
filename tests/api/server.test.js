@@ -755,6 +755,31 @@ describe('server API', () => {
     expect(sql).not.toMatch(/LIMIT 1/i);
   });
 
+  // The same real-world "X and Y" combined summary from
+  // calendar-events.test.js, exercised through next-collection's own
+  // separate query/mapping - the "+food only after transition week"
+  // qualifier belongs only to the General Waste half.
+  test('getNextCollection_withRealWorldAndCombinedSummary_attributesEachMatchToItsOwnSegment', async () => {
+    const summary = 'Garden waste and general waste+food (+food only after transition week)';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'waste+food', property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    const garden = res.body.collections.find(c => c.colour === '#92400e');
+    const general = res.body.collections.find(c => c.colour === '#6b7280');
+    expect(garden.label).toBe('Garden Waste');
+    expect(general.label).toBe('general waste+food (+food only after transition week)');
+  });
+
   // A span event whose start_date has already passed must still be found by
   // the WHERE clause as long as it's still ongoing (end_date still in the
   // future) - otherwise it would silently vanish from next-collection

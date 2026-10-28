@@ -102,6 +102,35 @@ function formatMatchedLabel(label, summary) {
   return `${label} (${summary})`;
 }
 
+// East Ayrshire sometimes combines several collections into one VEVENT by
+// literally concatenating each one's own standalone summary with " and "
+// (verified against the real feed: "Garden waste and general waste+food
+// (+food only after transition week)" is exactly "Garden waste" + " and " +
+// "general waste+food (+food only after transition week)" - both halves
+// appear verbatim elsewhere in the same feed as standalone single-day
+// entries). Splitting on that joiner lets each matched bin type be labelled
+// from just its own segment, so a qualifier that only applies to one
+// collection (e.g. "+food only after transition week") doesn't leak onto
+// every bin type collected that day.
+function splitSummarySegments(summary) {
+  return summary.split(/\s+and\s+/i).map(s => s.trim()).filter(Boolean);
+}
+
+// Finds which segment of a (possibly "X and Y"-combined) summary a specific
+// bin_types match actually belongs to, so formatMatchedLabel only sees the
+// text relevant to THAT match. Falls back to the whole summary when there's
+// nothing to split (the common case - no "and" present, e.g. the
+// pre-existing "Grey/Blue Mixed Bin" multi-match case) or - defensively -
+// when the match can't be attributed to exactly one segment, so this can
+// never produce a worse result than passing the whole summary through.
+function attributeSummarySegment(summary, matchText) {
+  const segments = splitSummarySegments(summary);
+  if (segments.length < 2) return summary;
+  const lowerMatch = matchText.toLowerCase();
+  const owner = segments.find(seg => seg.toLowerCase().includes(lowerMatch));
+  return owner || summary;
+}
+
 // Fans out to one row per matching bin_types rule when an event's summary
 // matches more than one - deliberately not deduplicated. Real feed data
 // does this for a genuine reason: East Ayrshire sometimes combines two
@@ -143,7 +172,7 @@ function expandDateRange(startDate, endDate) {
 
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
-    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour
+    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour, bt.summary_match AS binTypeMatch
     FROM events e
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
@@ -163,7 +192,7 @@ function getPropertyEventsRows(db, propertyId) {
     uid: r.uid,
     date: r.date,
     summary: r.summary,
-    label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
+    label: r.label ? formatMatchedLabel(r.label, attributeSummarySegment(r.summary, r.binTypeMatch)) : r.summary,
     colour: r.colour || '#6b7a99',
     matched: r.label != null,
   }));
@@ -314,6 +343,7 @@ app.get('/api/next-collection', (req, res) => {
       e.summary,
       bt.label            AS label,
       bt.colour           AS colour,
+      bt.summary_match    AS binTypeMatch,
       e.property_id,
       p.label             AS property_label
     FROM events e
@@ -343,7 +373,7 @@ app.get('/api/next-collection', (req, res) => {
       date: r.date,
       daysUntil: r.days_until,
       summary: r.summary,
-      label: r.label ? formatMatchedLabel(r.label, r.summary) : r.summary,
+      label: r.label ? formatMatchedLabel(r.label, attributeSummarySegment(r.summary, r.binTypeMatch)) : r.summary,
       // The pre-formatting value (bare bin_types.label, or the summary when
       // unmatched) - a stable key for de-duplicating across properties,
       // since `label` above can now embed a property-specific raw summary.
@@ -449,4 +479,4 @@ if (require.main === module) {
   app.listen(PORT, () => console.log(`bin-calendar running on port ${PORT}`));
 }
 
-module.exports = { app, getPropertyEventsRows, formatMatchedLabel };
+module.exports = { app, getPropertyEventsRows, formatMatchedLabel, attributeSummarySegment };

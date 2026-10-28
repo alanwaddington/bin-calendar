@@ -87,10 +87,15 @@ describe('getPropertyEventsRows', () => {
     expect(events.find(e => e.uid === 'u4').label).toBe('FOO COLLECTION');
   });
 
-  test('getPropertyEventsRows_withRealWorldAndCombinedSummary_returnsOneMarkerPerBinType', () => {
-    // The literal real feed text behind this test - East Ayrshire combined
-    // Garden Waste and General Waste into one VEVENT for one transitional
-    // date, rather than sending two separate VEVENTs.
+  test('getPropertyEventsRows_withRealWorldAndCombinedSummary_attributesEachMatchToItsOwnSegment', () => {
+    // The literal real feed text behind this test - East Ayrshire combines
+    // two standalone summaries with " and " into one VEVENT ("Garden waste"
+    // + " and " + "general waste+food (+food only after transition week)" -
+    // both halves appear verbatim elsewhere in the same real feed as their
+    // own single-day entries). The "+food only after transition week"
+    // qualifier belongs ONLY to the General Waste half - it must not also
+    // appear against the Garden Waste marker just because they share a
+    // VEVENT that day.
     db.prepare(
       "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Garden', 'Garden Waste', '#92400e')"
     ).run();
@@ -104,11 +109,10 @@ describe('getPropertyEventsRows', () => {
     const events = getPropertyEventsRows(db, propertyId);
 
     expect(events).toHaveLength(2);
-    expect(events.map(e => e.label)).toEqual([
-      'Garden waste and general waste+food (+food only after transition week)',
-      'Garden waste and general waste+food (+food only after transition week)',
-    ]);
-    expect(events.map(e => e.colour)).toEqual(['#92400e', '#6b7280']);
+    const garden = events.find(e => e.colour === '#92400e');
+    const general = events.find(e => e.colour === '#6b7280');
+    expect(garden.label).toBe('Garden Waste'); // matches its own segment exactly - no qualifier attached
+    expect(general.label).toBe('general waste+food (+food only after transition week)'); // keeps its own qualifier
   });
 
   test('getPropertyEventsRows_withNoBinTypeMatch_returnsRawSummaryAndUnmatched', () => {
