@@ -803,6 +803,30 @@ describe('server API', () => {
     expect(res.body.collections[0].label).toBe('General Waste (Trolley+food)');
   });
 
+  // Real-world bug report: a user's own live "Transition Week" bin_types
+  // rule (purple, #9333ea) incidentally matched the unrelated caveat
+  // "(+food only after transition week)" that appears on every General
+  // Waste day, rendering a spurious second marker. The Match text only
+  // appears inside the parenthetical, not in the actual collection name.
+  test('getNextCollection_withMatchOnlyInsideParentheticalCaveat_excludesThatFalseMatch', async () => {
+    const summary = 'General waste+food (+food only after transition week)';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        uid: 'u-false-positive', date: '2026-11-12', endDate: null, days_until: 15, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Waste+Food', property_id: 1, property_label: 'Home',
+      },
+      {
+        uid: 'u-false-positive', date: '2026-11-12', endDate: null, days_until: 15, summary,
+        label: 'Transition Week', colour: '#9333ea', binTypeMatch: 'Transition Week', property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].colour).toBe('#6b7280');
+  });
+
   // A span event whose start_date has already passed must still be found by
   // the WHERE clause as long as it's still ongoing (end_date still in the
   // future) - otherwise it would silently vanish from next-collection

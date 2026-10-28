@@ -141,6 +141,50 @@ function attributeSummarySegment(summary, matchText) {
 // so they agree on how many rows one event produces.
 const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'`;
 
+// Parenthetical text in this feed is always an explanatory caveat attached
+// to a DIFFERENT collection (e.g. "(+food only after transition week)" on
+// a General Waste day) - never an announcement of its own, separate
+// collection. A genuinely combined day is always joined with "and" instead
+// (see attributeSummarySegment above). So a word that only appears inside
+// parentheses must never, on its own, trigger a bin_types match - verified
+// against every real summary fetched this session.
+function stripParentheticals(text) {
+  return text.replace(/\([^()]*\)/g, '');
+}
+
+// The fan-out join above matches against the whole summary, parentheses
+// included - so a bin_types rule whose Match text happens to appear only
+// inside someone else's caveat (real-world case: a "Transition Week" rule
+// matching the words "transition week" buried inside "(+food only after
+// transition week)" on an unrelated General Waste day) produces a false
+// positive: a second, spurious marker for a day that isn't actually a
+// transition week. This removes exactly those candidate rows - per event
+// (grouped by uid), keeping only matches whose text appears outside any
+// parenthetical span. If that empties out every match for one event, falls
+// back to a single unmatched row rather than silently dropping the event
+// from the calendar - a real collection must never vanish just because its
+// only visible bin_types match turned out to be a false positive.
+function excludeParenthesesOnlyMatches(rows) {
+  const byUid = new Map();
+  for (const r of rows) {
+    if (!byUid.has(r.uid)) byUid.set(r.uid, []);
+    byUid.get(r.uid).push(r);
+  }
+
+  const result = [];
+  for (const group of byUid.values()) {
+    const kept = group.filter(r =>
+      !r.binTypeMatch || stripParentheticals(r.summary).toLowerCase().includes(r.binTypeMatch.toLowerCase())
+    );
+    if (kept.length > 0) {
+      result.push(...kept);
+    } else {
+      result.push({ ...group[0], label: null, colour: null, binTypeMatch: null });
+    }
+  }
+  return result;
+}
+
 // Two different bin_types rules can legitimately share a label and colour
 // (e.g. two Match patterns both labelled "General Waste"), and the fan-out
 // join above has no way to know that - it produces one row per match
@@ -208,12 +252,14 @@ function getPropertyEventsRows(db, propertyId) {
     ORDER BY e.start_date ASC, e.uid ASC, bt.id ASC
   `).all(propertyId);
 
+  const filteredRows = excludeParenthesesOnlyMatches(rows);
+
   // Stable-sorted by date (and uid as a tiebreak for same-date different
   // events) - ties between multiple matched rows for the SAME event keep
   // the bt.id ASC order the SQL already produced, so fan-out markers render
   // in a consistent, predictable order rather than whatever order the join
   // happened to return them in.
-  const expanded = rows
+  const expanded = filteredRows
     .flatMap(r => expandDateRange(r.date, r.endDate).map(date => ({ ...r, date })))
     .sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid));
 
@@ -366,6 +412,7 @@ app.get('/api/sync/runs', (req, res) => {
 app.get('/api/next-collection', (req, res) => {
   const rows = getDb().prepare(`
     SELECT
+      e.uid                AS uid,
       e.start_date        AS date,
       e.end_date           AS endDate,
       CAST((julianday(e.start_date) - julianday(date('now'))) AS INTEGER) AS days_until,
@@ -383,6 +430,8 @@ app.get('/api/next-collection', (req, res) => {
     ORDER BY e.start_date ASC, bt.id ASC
   `).all();
 
+  const filteredRows = excludeParenthesesOnlyMatches(rows);
+
   // Expand each row's [start_date, end_date) span into one entry per
   // covered day, offsetting the SQL-computed days_until by the day's
   // position within the span - day 0 is the row's own start_date (whose
@@ -391,7 +440,7 @@ app.get('/api/next-collection', (req, res) => {
   // in the past, per the WHERE clause above) surface dated and days-until'd
   // for TODAY - the correct point within the span - rather than for its
   // (by now past) start_date, or vanishing once that start_date has passed.
-  const expanded = rows
+  const expanded = filteredRows
     .flatMap(r => expandDateRange(r.date, r.endDate).map((date, i) => ({ ...r, date, days_until: r.days_until + i })))
     .filter(r => r.days_until >= 0)
     .sort((a, b) => a.date.localeCompare(b.date));

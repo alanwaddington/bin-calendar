@@ -160,6 +160,71 @@ describe('getPropertyEventsRows', () => {
     expect(general.label).toBe('general waste+food (+food only after transition week)'); // keeps its own qualifier
   });
 
+  // Real-world bug report: a user's own live config has a "Transition Week"
+  // bin_types rule (purple, #9333ea) for the genuine standalone "Transition
+  // week" event. That Match text is ALSO a literal substring of the
+  // unrelated caveat "(+food only after transition week)" that appears on
+  // every General Waste day - so the fan-out join was incidentally
+  // matching "Transition Week" against a day that has nothing to do with
+  // the actual transition week, rendering two markers (grey General Waste
+  // + purple Transition Week) for what is really just one collection.
+  test('getPropertyEventsRows_withMatchOnlyInsideParentheticalCaveat_excludesThatFalseMatch', () => {
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Waste+Food', 'General Waste', '#6b7280')"
+    ).run();
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Transition Week', 'Transition Week', '#9333ea')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-false-positive', 'General waste+food (+food only after transition week)', '2026-11-12')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].colour).toBe('#6b7280');
+    expect(events[0].label).toBe('General waste+food (+food only after transition week)');
+  });
+
+  // The "Transition Week" rule must still work for the actual event it's
+  // configured for - a standalone "Transition week" summary with no
+  // parentheses at all.
+  test('getPropertyEventsRows_withMatchOutsideAnyParentheses_stillMatchesNormally', () => {
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Transition Week', 'Transition Week', '#9333ea')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-real-transition', 'Transition week', '2026-11-23')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].colour).toBe('#9333ea');
+    expect(events[0].matched).toBe(true);
+  });
+
+  // Defensive fallback: if EVERY candidate match for an event turns out to
+  // be parentheses-only, the event must still render as unmatched (raw
+  // text, neutral colour) rather than silently vanishing from the
+  // calendar - a real collection must never disappear just because its
+  // only visible match was a false positive.
+  test('getPropertyEventsRows_whenEveryMatchIsParenthesesOnly_fallsBackToUnmatchedRatherThanVanishing', () => {
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('widget', 'Widget Collection', '#111111')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-vanish-guard', 'Normal Bin (contains a widget reference)', '2026-11-13')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].matched).toBe(false);
+    expect(events[0].label).toBe('Normal Bin (contains a widget reference)');
+    expect(events[0].colour).toBe('#6b7a99');
+  });
+
   test('getPropertyEventsRows_withNoBinTypeMatch_returnsRawSummaryAndUnmatched', () => {
     db.prepare(
       "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u2', 'Mystery Collection', '2026-11-06')"
