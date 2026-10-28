@@ -7,6 +7,21 @@
 
 ---
 
+## Findings Resolution (post-review)
+
+All findings were fixed, regardless of severity, per explicit user instruction. S2 was pre-existing and unrelated to this PR's diff — the user was asked explicitly whether to fold it into this PR, a separate PR, or defer it, and chose "same PR."
+
+| Finding | Outcome | Commit |
+|---|---|---|
+| m1 (stale ESLint globals) | **Fixed** — removed `_calSelectedId` and `goToPropertySettings` from `publicSharedGlobals`; verified `no-undef` now catches both (probed before and after) | `61194a8` |
+| m2 (no test for conditional `.cal-header`) | **Fixed** — added assertions to both existing switcher tests; verified they have teeth by simulating the exact regression and confirming the new assertion catches it, then restoring | `61194a8` |
+| S1 (inert `.cal-header` CSS) | **Fixed** — dropped the now-meaningless `justify-content`/`gap`; verified via real Chromium that computed styles are CSS defaults with no visual change | `61194a8` |
+| S2 (stale README UPRN references) | **Fixed** — pre-existing, unrelated to this PR; included at explicit user request. Found and fixed all three stale references (Features bullet, architecture diagram edge label, Requirements' dead getAddress.io line), not just the one originally flagged | `61194a8` |
+
+Also merged `main` into this branch (picking up PR #30's `googleapis` lazy-load fix) before final verification — the branch was 2 commits behind, which this review had flagged as untested. Re-verified after fixes: 232/232 tests passing, 0 lint errors/warnings, same coverage, real Chromium screenshot confirms no visual regression.
+
+---
+
 ## Summary
 
 | Item | Result |
