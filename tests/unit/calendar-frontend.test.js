@@ -242,6 +242,8 @@ describe('calendar.js rendering and state', () => {
     const select = window.document.getElementById('cal-property-select');
     expect(select).not.toBeNull();
     expect(select.options.length).toBe(2);
+    expect(window.document.querySelector('.cal-header')).not.toBeNull();
+    expect(Array.from(window.document.querySelectorAll('button')).some(b => b.textContent.includes('Property settings'))).toBe(false);
   });
 
   test('calendarSwitcher_withSinglePropertyOnly_isEntirelyAbsentFromDom', async () => {
@@ -253,6 +255,11 @@ describe('calendar.js rendering and state', () => {
     await window.loadCalendar();
 
     expect(window.document.getElementById('cal-property-select')).toBeNull();
+    // The switcher was .cal-header's only remaining child once the
+    // "Property settings" button was removed - with a single property
+    // (so no switcher either), the whole header row should be omitted
+    // rather than rendering empty.
+    expect(window.document.querySelector('.cal-header')).toBeNull();
   });
 
   test('stepCalendarMonth_withGapMonthsEitherSide_skipsGapsAndDisablesAtRealBoundaries', async () => {

@@ -4,7 +4,7 @@ A self-hosted Docker application that fetches bin collection schedules from East
 
 ## Features
 
-- Fetches ICS files from East Ayrshire Council by UPRN
+- Fetches bin collection dates from a user-supplied ICS calendar URL (e.g. East Ayrshire Council's ReCollect feed)
 - Syncs to Google Calendar (OAuth2) or iCloud (CalDAV)
 - Multiple properties supported — each syncs independently
 - Configurable sync schedule via a custom cron expression (default: 1st of each month)
@@ -35,7 +35,7 @@ graph TD
     SYNC --> GOOGLE
     SYNC --> ICLOUD
     SYNC --> DB
-    ICS -->|POST uprn| EAC
+    ICS -->|GET ics_url| EAC
 ```
 
 ## Requirements
@@ -43,7 +43,6 @@ graph TD
 - Docker and Docker Compose
 - A Google Cloud project with Calendar API enabled (optional — required for Google Calendar sync)
 - An iCloud app-specific password (optional — required for iCloud sync)
-- A getAddress.io API key (optional — enables address/UPRN lookup)
 
 ## Configuration
 
