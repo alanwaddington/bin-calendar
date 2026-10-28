@@ -73,6 +73,27 @@ function createSettingsWindow(fetchImpl) {
   return window;
 }
 
+// Same idea as createCalendarWindow, but loads logs.js for Logs page tests.
+function createLogsWindow(fetchImpl) {
+  const dom = new JSDOM(`
+    <nav>
+      <a class="nav-link" data-view="dashboard"></a>
+      <a class="nav-link" data-view="logs"></a>
+    </nav>
+    <div id="view-dashboard" class="view"></div>
+    <div id="view-logs" class="view hidden"></div>
+  `, { url: 'http://localhost/', runScripts: 'outside-only' });
+
+  const { window } = dom;
+  window.fetch = fetchImpl;
+
+  window.eval(fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8'));
+  window.eval(fs.readFileSync(path.join(PUBLIC_DIR, 'logs.js'), 'utf8'));
+
+  _openWindows.push(window);
+  return window;
+}
+
 // jsdom windows keep internal timers alive until closed, which otherwise
 // leaves Jest's process hanging after the run completes. Call this from an
 // afterEach in any test file using createCalendarWindow.
@@ -111,4 +132,4 @@ function mockRouterFetch(routes, calls = []) {
   };
 }
 
-module.exports = { createCalendarWindow, createSettingsWindow, mockFetch, mockRouterFetch, closeAllCalendarWindows };
+module.exports = { createCalendarWindow, createSettingsWindow, createLogsWindow, mockFetch, mockRouterFetch, closeAllCalendarWindows };

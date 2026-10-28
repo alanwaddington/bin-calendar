@@ -51,9 +51,22 @@ function renderLogResult(r) {
   const dur = r.started_at && r.completed_at
     ? ` &middot; ${Math.round((new Date(r.completed_at) - new Date(r.started_at)) / 1000)}s`
     : '';
+  // PR #34 review finding M3: events_deleted was recorded and already
+  // returned by the API, but never rendered here - the one irreversible
+  // action in the app (removing events from the user's own external
+  // calendar on Garden Waste opt-out) was invisible in the one place a
+  // user would look to confirm what a sync run did. Shown only when
+  // non-zero, so the common case (a property that never opts out) is
+  // completely unaffected; styled in var(--warning) rather than
+  // var(--danger) since a successful opted-out deletion is expected
+  // behaviour, not an error, but still worth distinguishing from the
+  // neutral added/skipped counts.
+  const deletedPart = r.events_deleted
+    ? `, <span style="color:var(--warning);font-weight:600">deleted: ${r.events_deleted}</span>`
+    : '';
   return `<div class="log-result">
     <strong style="color:var(--text)">${label}</strong>
-    <span style="color:var(--text-3)">&nbsp;&mdash;&nbsp;</span>added: ${r.events_added}, skipped: ${r.events_skipped}${dur}
+    <span style="color:var(--text-3)">&nbsp;&mdash;&nbsp;</span>added: ${r.events_added}, skipped: ${r.events_skipped}${deletedPart}${dur}
     ${r.error ? `<span style="color:var(--danger)"> &mdash; ${escLogHtml(r.error)}</span>` : ''}
   </div>`;
 }
