@@ -102,16 +102,16 @@ function formatMatchedLabel(label, summary) {
   return `${label} (${summary})`;
 }
 
-// A plain `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match
-// || '%'` fans out to one row per matching rule when an event's summary
-// matches more than one bin type - this correlated subquery collapses that
-// to a single match (lowest id wins) instead, so every endpoint that joins
-// events to bin_types agrees on how many rows one event produces.
-const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON bt.id = (
-      SELECT b2.id FROM bin_types b2
-      WHERE e.summary LIKE '%' || b2.summary_match || '%'
-      ORDER BY b2.id LIMIT 1
-    )`;
+// Fans out to one row per matching bin_types rule when an event's summary
+// matches more than one - deliberately not deduplicated. Real feed data
+// does this for a genuine reason: East Ayrshire sometimes combines two
+// separate collections into one VEVENT's summary instead of sending two
+// VEVENTs (e.g. "Garden waste and general waste+food (+food only after
+// transition week)" on one transitional date) - each match should get its
+// own marker, not have one silently picked over the other. Both endpoints
+// that join events to bin_types use this same join, so they agree on how
+// many rows one event produces.
+const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'`;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -147,9 +147,14 @@ function getPropertyEventsRows(db, propertyId) {
     FROM events e
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
-    ORDER BY e.start_date ASC, e.uid ASC
+    ORDER BY e.start_date ASC, e.uid ASC, bt.id ASC
   `).all(propertyId);
 
+  // Stable-sorted by date (and uid as a tiebreak for same-date different
+  // events) - ties between multiple matched rows for the SAME event keep
+  // the bt.id ASC order the SQL already produced, so fan-out markers render
+  // in a consistent, predictable order rather than whatever order the join
+  // happened to return them in.
   const expanded = rows
     .flatMap(r => expandDateRange(r.date, r.endDate).map(date => ({ ...r, date })))
     .sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid));
@@ -316,7 +321,7 @@ app.get('/api/next-collection', (req, res) => {
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.start_date >= date('now')
        OR (e.end_date IS NOT NULL AND e.end_date > date('now'))
-    ORDER BY e.start_date ASC
+    ORDER BY e.start_date ASC, bt.id ASC
   `).all();
 
   // Expand each row's [start_date, end_date) span into one entry per

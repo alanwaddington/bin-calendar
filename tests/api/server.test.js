@@ -487,7 +487,7 @@ describe('server API', () => {
     expect(res.body.events).toEqual([]);
   });
 
-  test('getPropertyEvents_withMultipleBinTypeMatches_returnsSingleMarkerPerEvent', async () => {
+  test('getPropertyEvents_withMatchedSummaryMoreSpecificThanLabel_returnsRawSummaryAlone', async () => {
     mockPrepare.get.mockReturnValueOnce({ id: 1 });
     mockPrepare.all.mockReturnValueOnce([
       {
@@ -504,9 +504,22 @@ describe('server API', () => {
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(1);
     expect(res.body.events[0].label).toBe('General waste+food');
+  });
+
+  // A summary matching multiple bin_types rules shows one marker per match
+  // (e.g. East Ayrshire's real "Garden waste and general waste+food..."
+  // combining two genuinely separate collections into one VEVENT) - a
+  // fan-out join, not the single-lowest-id-match subquery used elsewhere
+  // for collapsing an AMBIGUOUS single match (see getPropertyEventsRows
+  // real-DB tests for the full real-world case).
+  test('getPropertyEvents_sqlUsesFanOutJoinNotSingleMatchSubquery', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/properties/1/events');
 
     const eventsSql = getDb().prepare.mock.calls.map(c => c[0]).find(sql => sql.includes('FROM events'));
-    expect(eventsSql).toMatch(/LIMIT 1/i);
+    expect(eventsSql).toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+    expect(eventsSql).not.toMatch(/LIMIT 1/i);
   });
 
   test('getPropertyEvents_withNoBinTypeMatch_returnsRawSummaryAndNeutralColour', async () => {
@@ -727,19 +740,19 @@ describe('server API', () => {
     expect(res.body.collections[0].rawLabel).toBe('Purple Bin Collection');
   });
 
-  // PR #27 review finding M2: /api/next-collection used a fan-out
-  // `LIKE` join (one row per matching bin_types rule) while
-  // getPropertyEventsRows used a de-duplicating correlated subquery - the
-  // two endpoints disagreed about how many rows one event produces. This
-  // brings next-collection onto the same lowest-id-wins subquery.
-  test('getNextCollection_sqlUsesSameDeduplicatingSubqueryAsPropertyEvents', async () => {
+  // next-collection and getPropertyEventsRows must agree on how many rows
+  // one event produces when its summary matches multiple bin_types rules -
+  // both now fan out (one row per match), rather than one deduplicating and
+  // the other not (PR #27 review finding M2 was exactly that mismatch, the
+  // other direction).
+  test('getNextCollection_sqlUsesSameFanOutJoinAsPropertyEvents', async () => {
     mockPrepare.all.mockReturnValueOnce([]);
 
     await request(app).get('/api/next-collection');
 
     const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
-    expect(sql).toMatch(/LIMIT 1/i);
-    expect(sql).not.toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+    expect(sql).toMatch(/LEFT JOIN bin_types bt ON e\.summary LIKE/i);
+    expect(sql).not.toMatch(/LIMIT 1/i);
   });
 
   // A span event whose start_date has already passed must still be found by

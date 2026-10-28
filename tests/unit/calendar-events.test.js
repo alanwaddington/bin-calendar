@@ -17,7 +17,14 @@ describe('getPropertyEventsRows', () => {
     db.close();
   });
 
-  test('getPropertyEventsRows_withMultipleBinTypeMatches_returnsSingleRowWithLowestIdRule', () => {
+  // Real-world case: East Ayrshire's feed sent "Garden waste and general
+  // waste+food (+food only after transition week)" as a SINGLE VEVENT
+  // combining two genuinely separate collections into one textual summary,
+  // rather than two VEVENTs. A summary matching multiple bin_types rules
+  // now shows one marker per match (both rows sharing the same uid/date/
+  // summary, since it's genuinely one event), rather than picking just the
+  // lowest-id match and hiding the others.
+  test('getPropertyEventsRows_withMultipleBinTypeMatches_returnsOneRowPerMatch', () => {
     // 'Grey' and 'Blue' are both seeded bin_types (003.sql); Grey has the lower id.
     db.prepare(
       "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u1', 'Grey/Blue Mixed Bin', '2026-11-05')"
@@ -25,10 +32,14 @@ describe('getPropertyEventsRows', () => {
 
     const events = getPropertyEventsRows(db, propertyId);
 
-    expect(events).toHaveLength(1);
-    expect(events[0].label).toBe('General Waste (Grey/Blue Mixed Bin)');
-    expect(events[0].colour).toBe('#6b7280');
-    expect(events[0].matched).toBe(true);
+    expect(events).toHaveLength(2);
+    expect(events.every(e => e.uid === 'u1' && e.date === '2026-11-05')).toBe(true);
+    expect(events.map(e => e.label)).toEqual([
+      'General Waste (Grey/Blue Mixed Bin)',
+      'Recycling (Grey/Blue Mixed Bin)',
+    ]);
+    expect(events.map(e => e.colour)).toEqual(['#6b7280', '#3b82f6']);
+    expect(events.every(e => e.matched)).toBe(true);
   });
 
   test('getPropertyEventsRows_whenSummaryHasExtraInfoBeyondTheMatch_appendsRawSummaryInParens', () => {
@@ -74,6 +85,30 @@ describe('getPropertyEventsRows', () => {
     const events = getPropertyEventsRows(db, propertyId);
 
     expect(events.find(e => e.uid === 'u4').label).toBe('FOO COLLECTION');
+  });
+
+  test('getPropertyEventsRows_withRealWorldAndCombinedSummary_returnsOneMarkerPerBinType', () => {
+    // The literal real feed text behind this test - East Ayrshire combined
+    // Garden Waste and General Waste into one VEVENT for one transitional
+    // date, rather than sending two separate VEVENTs.
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('Garden', 'Garden Waste', '#92400e')"
+    ).run();
+    db.prepare(
+      "INSERT INTO bin_types (summary_match, label, colour) VALUES ('waste+food', 'General Waste', '#6b7280')"
+    ).run();
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-combined', 'Garden waste and general waste+food (+food only after transition week)', '2026-11-26')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events).toHaveLength(2);
+    expect(events.map(e => e.label)).toEqual([
+      'Garden waste and general waste+food (+food only after transition week)',
+      'Garden waste and general waste+food (+food only after transition week)',
+    ]);
+    expect(events.map(e => e.colour)).toEqual(['#92400e', '#6b7280']);
   });
 
   test('getPropertyEventsRows_withNoBinTypeMatch_returnsRawSummaryAndUnmatched', () => {
