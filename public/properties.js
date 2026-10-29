@@ -3,6 +3,15 @@ registerView('settings', loadSettings);
 // ── State ──────────────────────────────────────────────────────
 let _settingsProperties = [];
 let _binTypes = [];
+// PR #37 review finding C1: distinguishes "bin types fetched, none are
+// flagged" from "bin types failed to fetch" - without this, a transient
+// GET /api/bin-types failure left _binTypes as [], buildOptInSwitches
+// rendered no switches, savePropertyEdit's `flagged` list was empty, and
+// an unrelated Save (e.g. fixing a typo in the label) silently sent
+// opted_in_bin_type_ids: [] - wiping every opt-in with no warning and
+// triggering a scoped sync that deleted the property's real calendar
+// events. savePropertyEdit checks this flag before touching opt-ins at all.
+let _binTypesLoaded = false;
 
 // ── Load ───────────────────────────────────────────────────────
 async function loadSettings() {
@@ -282,6 +291,19 @@ async function renderPropertyAccordions() {
     return;
   }
 
+  renderPropertyAccordionsFromCache();
+}
+
+// PR #37 review finding M6: a bin type's requires_opt_in flag changing
+// (flagged, unflagged, or deleted) must update which switches every
+// property accordion shows - without a re-render here, the switches
+// stayed stale until the next full page load, and an unflagged type's
+// now-orphaned checkbox could silently drop its opt-in on the next Save
+// with no warning, since it no longer appears in the `flagged` list that
+// savePropertyEdit computes `turnedOff` from. No property data has
+// changed (only which bin types are flagged), so this re-renders from
+// the already-fetched `_settingsProperties` rather than re-fetching.
+function renderPropertyAccordionsFromCache() {
   const el = document.getElementById('property-accordions');
   if (!el) return;
 
@@ -396,6 +418,17 @@ async function savePropertyEdit(id) {
   if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
 
+  // PR #37 review finding C1: bin types failed to load, so there is no
+  // reliable way to know which switches should exist or what they mean -
+  // save the label/URL change but leave opt-ins completely untouched
+  // (omit the field; the server already no-ops on a non-array) rather
+  // than guessing with a stale or empty switch set.
+  if (!_binTypesLoaded) {
+    await performPropertySave(id, label, ics_url, undefined, false,
+      'Opt-in collections could not be verified, so they were left unchanged. Reload the page to change them.');
+    return;
+  }
+
   const p = _settingsProperties.find(prop => prop.id === id);
   const flagged = _binTypes.filter(bt => bt.requires_opt_in);
   const prevIds = new Set(p?.opted_in_bin_type_ids || []);
@@ -417,10 +450,16 @@ async function savePropertyEdit(id) {
   await performPropertySave(id, label, ics_url, newIds, changed);
 }
 
-async function performPropertySave(id, label, ics_url, optedInBinTypeIds, changed) {
+async function performPropertySave(id, label, ics_url, optedInBinTypeIds, changed, postSaveNote) {
   const errorEl = document.getElementById(`prop-save-error-${id}`);
+  // PR #37 review finding C1: optedInBinTypeIds is `undefined` only when
+  // bin types failed to load - omit the field entirely rather than send
+  // opted_in_bin_type_ids: [], which the server would apply literally.
+  const body = optedInBinTypeIds !== undefined
+    ? { label, ics_url, opted_in_bin_type_ids: optedInBinTypeIds }
+    : { label, ics_url };
   try {
-    await api('PUT', `/api/properties/${id}`, { label, ics_url, opted_in_bin_type_ids: optedInBinTypeIds });
+    await api('PUT', `/api/properties/${id}`, body);
     const p = _settingsProperties.find(prop => prop.id === id);
     if (p && p.connected && p.calendar_type === 'google') {
       const calSel = document.getElementById(`cal-select-${id}`);
@@ -430,6 +469,14 @@ async function performPropertySave(id, label, ics_url, optedInBinTypeIds, change
     }
     showToast('Property updated');
     await renderPropertyAccordions();
+    // PR #37 review finding C1: renderPropertyAccordions() above replaces
+    // the whole accordion, including a fresh (empty) error element - so a
+    // note meant to survive the save (e.g. "opt-ins were left unchanged")
+    // has to be re-applied to the NEW element, not the one captured above.
+    if (postSaveNote) {
+      const newErrorEl = document.getElementById(`prop-save-error-${id}`);
+      if (newErrorEl) newErrorEl.textContent = postSaveNote;
+    }
     // #35 Task 7: fire-and-forget - Save has already completed and the
     // user is free to navigate away while this runs in the background.
     if (changed) triggerScopedSync(id, label);
@@ -917,7 +964,9 @@ async function addSaveIcloud() {
 async function renderBinTypes() {
   try {
     _binTypes = await api('GET', '/api/bin-types');
+    _binTypesLoaded = true;
   } catch (err) {
+    _binTypesLoaded = false;
     const el = document.getElementById('bin-types-section');
     if (el) el.innerHTML = `<p class="form-error">Failed to load bin types: ${escHtml(err.message)}</p>`;
     return;
@@ -1005,6 +1054,7 @@ async function saveBinTypeEdit(id) {
     await api('PUT', `/api/bin-types/${id}`, { summary_match: match, label, colour, requires_opt_in });
     showToast('Bin type updated');
     await renderBinTypes();
+    renderPropertyAccordionsFromCache();
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -1026,6 +1076,7 @@ async function doDeleteBinType(id) {
     await api('DELETE', `/api/bin-types/${id}`);
     showToast('Bin type deleted');
     await renderBinTypes();
+    renderPropertyAccordionsFromCache();
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -1080,6 +1131,7 @@ async function saveNewBinType() {
     await api('POST', '/api/bin-types', { summary_match: match, label, colour, requires_opt_in });
     showToast('Bin type added');
     await renderBinTypes();
+    renderPropertyAccordionsFromCache();
   } catch (err) {
     errorEl.textContent = err.message;
   }

@@ -497,6 +497,140 @@ describe('properties.js - add-property form posts opted_in_bin_type_ids (#35 Tas
   });
 });
 
+describe('properties.js - resilience to a failed GET /api/bin-types (PR #37 review C1)', () => {
+  test('savePropertyEdit_whenBinTypesFailedToLoad_preservesExistingOptInsInsteadOfWipingThem', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: true, credential_status: 'ok',
+      opted_in_bin_type_ids: [3], // property IS opted in to bin type 3
+    };
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', ok: false, status: 500, body: { error: 'boom' } },
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+      // Deliberately no POST /api/properties/1/sync route - a stray call
+      // here would prove the fix failed, since nothing changed.
+    ], calls));
+
+    await window.loadSettings();
+    expect(window.document.querySelector('.opt-in-switches')).toBeNull();
+
+    window.document.getElementById('prop-label-1').value = 'Home renamed';
+    await window.savePropertyEdit(1);
+    await flush();
+
+    const put = calls.find(c => c.method === 'PUT' && c.url === '/api/properties/1');
+    expect(put).toBeDefined();
+    expect(put.body.opted_in_bin_type_ids).toBeUndefined(); // omitted, not wiped to []
+    expect(window.document.querySelector('.modal-overlay')).toBeNull();
+    expect(calls.some(c => c.url === '/api/properties/1/sync')).toBe(false);
+    expect(window.document.getElementById('prop-save-error-1').textContent).toMatch(/opt-in/i);
+  });
+
+  test('savePropertyEdit_whenBinTypesFailedToLoad_stillSavesLabelAndIcsUrlChanges', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: true, credential_status: 'ok', opted_in_bin_type_ids: [],
+    };
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', ok: false, status: 500, body: { error: 'boom' } },
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+    ], calls));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-label-1').value = 'Renamed Home';
+    await window.savePropertyEdit(1);
+
+    const put = calls.find(c => c.method === 'PUT' && c.url === '/api/properties/1');
+    expect(put.body.label).toBe('Renamed Home');
+  });
+
+  test('savePropertyEdit_whenBinTypesLoadedNormally_isUnaffectedByTheGuard', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [],
+    };
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, runId: 1, overallStatus: 'success', results: [{ propertyId: 1 }] } },
+    ], calls));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-opt-in-1-1').checked = true;
+    await window.savePropertyEdit(1);
+    await flush();
+
+    const put = calls.find(c => c.method === 'PUT' && c.url === '/api/properties/1');
+    expect(put.body.opted_in_bin_type_ids).toEqual([1]);
+    expect(calls.some(c => c.url === '/api/properties/1/sync')).toBe(true);
+  });
+});
+
+describe('properties.js - property switches stay in sync with bin-type edits (PR #37 review M6)', () => {
+  test('saveBinTypeEdit_flaggingANewlyOptInRequiredType_rerendersPropertySwitchesWithoutReload', async () => {
+    let binTypesState = [{ id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 0 }];
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [],
+    };
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', body: () => binTypesState },
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/bin-types/1', body: () => {
+        binTypesState = [{ ...binTypesState[0], requires_opt_in: 1 }];
+        return { ok: true };
+      } },
+    ]));
+
+    await window.loadSettings();
+    expect(window.document.getElementById('prop-opt-in-1-1')).toBeNull();
+
+    window.editBinTypeRow(1);
+    window.document.getElementById('bt-opt-in-1').checked = true;
+    await window.saveBinTypeEdit(1);
+
+    expect(window.document.getElementById('prop-opt-in-1-1')).not.toBeNull();
+  });
+
+  test('doDeleteBinType_removingAFlaggedType_removesItsSwitchFromThePropertyAccordion', async () => {
+    let binTypesState = [{ id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 }];
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1],
+    };
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', body: () => binTypesState },
+      SCHEDULE_ROUTE,
+      { method: 'DELETE', url: '/api/bin-types/1', body: () => { binTypesState = []; return {}; } },
+    ]));
+
+    await window.loadSettings();
+    expect(window.document.getElementById('prop-opt-in-1-1')).not.toBeNull();
+
+    await window.doDeleteBinType(1);
+
+    expect(window.document.getElementById('prop-opt-in-1-1')).toBeNull();
+  });
+});
+
 describe('properties.js - Bin Types requires_opt_in flag, generalized (#35 Task 7)', () => {
   test('buildBinTypeRow_withRequiresOptInTrue_showsACheckmarkInTheOptInColumn', async () => {
     const window = createSettingsWindow(mockRouterFetch([
