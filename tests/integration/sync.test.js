@@ -1107,4 +1107,191 @@ describe('sync', () => {
       expect.objectContaining({ uid: 'evt-combined', summary: COMBINED_SUMMARY })
     );
   });
+
+  // --- Bug report: stale events (no longer in the feed at all) were never
+  // removed from the external calendar, leaving invalid uplifts behind.
+  // Distinct from the Garden Waste delete path above: that one targets an
+  // event that IS still in the feed but is gated out by opt-in state. This
+  // one targets a uid that has vanished from the feed entirely - the
+  // council changed or cancelled that collection.
+
+  test('runSync_eventNoLongerInFeedOnGoogle_deletesItFromTheExternalCalendar', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]); // no garden matchers - irrelevant to this bug
+    // Current feed no longer contains 'evt-cancelled' at all.
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-still-here', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    // The external calendar still has both: one that's still in the feed,
+    // and one the council has since removed/changed.
+    google.listEvents.mockResolvedValue([
+      { iCalUID: 'evt-still-here', id: 'google-id-1' },
+      { iCalUID: 'evt-cancelled', id: 'google-id-2' },
+    ]);
+
+    await runSync();
+
+    expect(google.deleteEvent).toHaveBeenCalledWith(property, 'google-id-2');
+    expect(google.deleteEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test('runSync_eventStillInFeedOnGoogle_isNotDeleted', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-still-here', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-still-here', id: 'google-id-1' }]);
+
+    await runSync();
+
+    expect(google.deleteEvent).not.toHaveBeenCalled();
+  });
+
+  test('runSync_eventNoLongerInFeedOnIcloud_deletesItFromTheExternalCalendar', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-still-here', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    const stayingObject = { url: 'https://caldav.icloud.com/123/evt-still-here.ics', etag: '"e1"' };
+    const cancelledObject = { url: 'https://caldav.icloud.com/123/evt-cancelled.ics', etag: '"e2"' };
+    icloud.listEventObjects.mockResolvedValue(new Map([
+      ['evt-still-here', stayingObject],
+      ['evt-cancelled', cancelledObject],
+    ]));
+
+    await runSync();
+
+    expect(icloud.deleteEvent).toHaveBeenCalledWith(property, cancelledObject);
+    expect(icloud.deleteEvent).toHaveBeenCalledTimes(1);
+  });
+
+  // Mirrors PR #34 review finding m2 for this new delete path: only a
+  // CONFIRMED deletion is counted - if the provider call fails, nothing
+  // actually changed on the external calendar.
+  test('runSync_eventNoLongerInFeed_failedDeletionIsNotCountedInEventsDeleted', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-still-here', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([
+      { iCalUID: 'evt-still-here', id: 'google-id-1' },
+      { iCalUID: 'evt-cancelled', id: 'google-id-2' },
+    ]);
+    google.deleteEvent.mockResolvedValue(false);
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const resultRunCall = runCalls.find(args => args.length === 8 && args[1] === 1);
+    expect(resultRunCall[4]).toBe(0); // deleted count stays 0, not 1
+  });
+
+  test('runSync_eventNoLongerInFeed_isNotDoubleProcessedByTheGardenWasteDeleteBranch', async () => {
+    // A uid absent from the feed can never be classified as pure/combined
+    // garden waste (classification only runs over events actually in the
+    // feed) - this just locks in that the two delete paths stay disjoint:
+    // deleteEvent is called exactly once per stale uid, not twice.
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-still-here', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([
+      { iCalUID: 'evt-still-here', id: 'google-id-1' },
+      { iCalUID: 'evt-cancelled-garden-looking', id: 'google-id-2' },
+    ]);
+
+    await runSync();
+
+    expect(google.deleteEvent).toHaveBeenCalledTimes(1);
+    expect(google.deleteEvent).toHaveBeenCalledWith(property, 'google-id-2');
+  });
+
+  test('runSync_withNoStaleEvents_doesNotCallDeleteAtAll', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-1', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-1', id: 'google-id-1' }]);
+
+    await runSync();
+
+    expect(google.deleteEvent).not.toHaveBeenCalled();
+  });
 });

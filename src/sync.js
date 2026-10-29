@@ -202,6 +202,23 @@ async function syncProperty(db, runId, property, gardenMatchers) {
       added++;
     }
 
+    // Bug report: an event that has vanished from the feed entirely (the
+    // council changed or cancelled that collection) was never removed from
+    // the external calendar - the loop above only ever inserts/updates
+    // events that ARE in the feed, so a uid with nothing left to overwrite
+    // it just sat there indefinitely as a stale, no-longer-valid uplift.
+    // Disjoint from the Garden Waste delete branch above, which only ever
+    // considers a uid that IS still in the feed - every uid reaching this
+    // loop is, by construction, absent from `events`.
+    const feedUids = new Set(events.map(e => e.uid));
+    for (const [uid, identifier] of existingByUid) {
+      if (feedUids.has(uid)) continue;
+      const ok = property.calendar_type === 'google'
+        ? await google.deleteEvent(property, identifier.id)
+        : await icloud.deleteEvent(property, identifier);
+      if (ok) deleted++;
+    }
+
     updateCredentialStatus(db, property.id, 'ok');
     cacheEvents(db, property.id, events);
     writeResult(db, runId, property.id, { added, skipped, deleted, updated, error: warnings.join('; ') || null, startedAt });
@@ -258,6 +275,19 @@ function cacheEvents(db, propertyId, events) {
   );
 
   const insertAll = db.transaction(() => {
+    // Bug report companion fix: the local cache must stop carrying a uid
+    // the moment it's no longer in the feed, not just once its (now
+    // stale) start_date happens to pass - otherwise it lingers as a
+    // phantom "collection" in the app's own Dashboard/Calendar too.
+    const feedUids = events.map(e => e.uid);
+    if (feedUids.length > 0) {
+      const placeholders = feedUids.map(() => '?').join(',');
+      db.prepare(`DELETE FROM events WHERE property_id = ? AND uid NOT IN (${placeholders})`)
+        .run(propertyId, ...feedUids);
+    } else {
+      db.prepare('DELETE FROM events WHERE property_id = ?').run(propertyId);
+    }
+
     for (const event of events) {
       const start = new Date(event.start);
       if (start < today || start > sixMonthsAhead) continue;

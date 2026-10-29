@@ -159,6 +159,54 @@ describe('cacheEvents', () => {
     expect(row.end_date).toBeNull();
   });
 
+  // Bug report: East Ayrshire changes/cancels a previously-published
+  // collection date and the feed stops including that uid entirely - the
+  // local cache must stop carrying it too, not just leave it there until
+  // its (now-stale) start_date happens to pass.
+  test('cacheEvents_whenPreviouslyCachedUidNoLongerInNewFeed_removesItFromCache', () => {
+    const futureDate = getFutureDate(30);
+    syncModule.cacheEvents(db, propertyId, [
+      { uid: 'uid-stays', summary: 'Grey Bin', start: new Date(futureDate), end: new Date(futureDate) },
+      { uid: 'uid-removed-by-council', summary: 'Grey Bin', start: new Date(getFutureDate(31)), end: new Date(getFutureDate(31)) },
+    ]);
+
+    // Second fetch no longer contains 'uid-removed-by-council' at all.
+    syncModule.cacheEvents(db, propertyId, [
+      { uid: 'uid-stays', summary: 'Grey Bin', start: new Date(futureDate), end: new Date(futureDate) },
+    ]);
+
+    const rows = db.prepare('SELECT uid FROM events WHERE property_id = ?').all(propertyId);
+    expect(rows.map(r => r.uid)).toEqual(['uid-stays']);
+  });
+
+  test('cacheEvents_whenNewFeedIsEmpty_removesEveryCachedRowForThatProperty', () => {
+    syncModule.cacheEvents(db, propertyId, [
+      { uid: 'uid-1', summary: 'Grey Bin', start: new Date(getFutureDate(30)), end: null },
+    ]);
+
+    syncModule.cacheEvents(db, propertyId, []);
+
+    const rows = db.prepare('SELECT * FROM events WHERE property_id = ?').all(propertyId);
+    expect(rows).toHaveLength(0);
+  });
+
+  test('cacheEvents_removalOfStaleUids_onlyAffectsTheGivenProperty', () => {
+    const otherPropertyId = db.prepare(
+      "INSERT INTO properties (label, uprn, calendar_type) VALUES ('Other', '99999', 'google')"
+    ).run().lastInsertRowid;
+    syncModule.cacheEvents(db, otherPropertyId, [
+      { uid: 'uid-other-property', summary: 'Grey Bin', start: new Date(getFutureDate(30)), end: null },
+    ]);
+
+    syncModule.cacheEvents(db, propertyId, [
+      { uid: 'uid-mine', summary: 'Grey Bin', start: new Date(getFutureDate(30)), end: null },
+    ]);
+    syncModule.cacheEvents(db, propertyId, []); // my feed goes empty
+
+    const otherRows = db.prepare('SELECT uid FROM events WHERE property_id = ?').all(otherPropertyId);
+    expect(otherRows.map(r => r.uid)).toEqual(['uid-other-property']);
+  });
+
   test('cacheEvents_withMultipleEvents_insertsAllInSingleTransaction', () => {
     const events = Array.from({ length: 5 }, (_, i) => ({
       uid: `uid-${i}`,
