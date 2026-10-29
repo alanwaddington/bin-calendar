@@ -10,7 +10,9 @@ A self-hosted Docker application that fetches bin collection schedules from East
 - Configurable sync schedule via a custom cron expression (default: 1st of each month)
 - Manual sync via the web UI
 - Per-property calendar view — month grid (desktop) / agenda list (mobile) of synced collection dates, with month navigation and a property switcher
-- Sync history and per-property logs
+- Configurable bin-type label/colour mapping (Settings → Bin Types), with an opt-in flag for paid/opt-in collection types
+- Per-property opt-in for Garden Waste collection — hidden from the Dashboard/Calendar and never pushed to the external calendar until a property explicitly opts in; opting out removes any already-synced Garden Waste events on the next sync
+- Sync history and per-property logs, including added/updated/deleted event counts
 - Credentials encrypted at rest (AES-256-GCM)
 
 ## Architecture
@@ -256,7 +258,7 @@ Pull requests also run the test job (no Docker build).
 | GET | `/api/config` | Feature flags (Google configured, address lookup configured) |
 | GET | `/api/properties` | List all properties |
 | POST | `/api/properties` | Create a property |
-| PUT | `/api/properties/:id` | Update label and ICS calendar URL |
+| PUT | `/api/properties/:id` | Update label, ICS calendar URL, and Garden Waste opt-in |
 | DELETE | `/api/properties/:id` | Delete a property |
 | GET | `/api/properties/:id/events` | Cached collection events for a property (calendar view) |
 | GET | `/api/google/auth-url/:propertyId` | Start Google OAuth flow |
