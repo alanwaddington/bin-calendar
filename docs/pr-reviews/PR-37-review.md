@@ -5,7 +5,7 @@
 **Branch:** feature/35-generalize-bin-type-opt-in → main
 **State:** Open
 
-> **Post-review update (2026-10-29):** per the user's standing instruction to fix every finding regardless of severity, all 18 code-level findings below (C1, M1–M6, m2–m10, S1–S2) are now fixed and re-verified — see the `Outcome` note on each. Full suite: 472/472 passing (was 436), lint still clean. Two items are intentionally **not** code-fixed: **S3** (wildcard cleanup migration) was judged too risky to apply blind against unknown live production data — see its note — and **m1**/**S4** are operational pre-deploy steps (checking a count on, and backing up, the real NAS database) that require access this session doesn't have. All three are flagged to the user as open follow-ups.
+> **Post-review update (2026-10-29):** per the user's standing instruction to fix every finding regardless of severity, all 18 code-level findings below (C1, M1–M6, m2–m10, S1–S2) are now fixed and re-verified — see the `Outcome` note on each. Full suite: 472/472 passing (was 436), lint still clean. **m1** and **S3** were operational checks against the real NAS database rather than code fixes — both run (see their `Outcome` notes): the backfill count is the expected `1`, and no `bin_types.summary_match` row contains a wildcard, so S3's cleanup migration isn't needed at all. **S4** (back up the NAS database before this deploys) remains the one genuinely outstanding item, and can only be done by the user.
 
 ---
 
@@ -13,7 +13,7 @@
 
 | Item | Result |
 |------|--------|
-| Overall Assessment | ~~Fail ❌~~ → **Pass ✅** (post-fix) — all 20 code-level findings resolved; 3 non-code items remain (see below) |
+| Overall Assessment | ~~Fail ❌~~ → **Pass ✅** (post-fix) — all findings resolved or confirmed not applicable; only S4 (a manual pre-deploy backup) remains |
 | Risk Level | ~~High~~ → **Low** (post-fix) — C1's data-loss path is closed and regression-tested |
 | Test Coverage | 472/472 passing (was 436) — error paths (C1, M6) and XSS now covered |
 | Acceptance Criteria | **18 / 18 Met** (all verified against code, not checkboxes) |
@@ -238,6 +238,7 @@ Updated alongside each task. Quality is good — real DOM, real `api()`, and the
 - **Location:** `src/migrations/009.sql:25-29`
 - **Description:** The backfill CROSS JOINs opted-in properties against *flagged* bin types. **Verified empirically:** a property with `garden_waste_opted_in = 1` while no bin type is flagged produces zero opt-in rows. Pre-009 that stored `1` would have taken effect the moment an admin flagged a type; post-009 the property is opted out. Only bites if the live NAS database is in that state — in which case nothing syncs as garden waste today anyway, so it is lost *intent*, not lost current behaviour.
 - **Recommendation:** Before deploying, check `SELECT count(*) FROM bin_types WHERE is_garden_waste = 1;` on the NAS. If ≥ 1 (the expected state), the backfill is exact and nothing needs changing.
+- **Outcome:** **Confirmed healthy (2026-10-29).** Checked against the real NAS database: `{ n: 1 }` — exactly one bin type is flagged, the expected state. The backfill is exact for this data; nothing to change.
 
 #### m2 — Skipped-sync detection string-matches server prose
 - **Category:** Code Quality
@@ -323,6 +324,7 @@ Updated alongside each task. Quality is good — real DOM, real `api()`, and the
 - **Location:** `src/server.js:555` vs `src/migrations/009.sql`
 - **Description:** `sanitiseBinTypeInput` strips LIKE wildcards going forward, but 009 does not clean rows already stored, and `BIN_TYPE_JOIN_SQL`'s `LIKE` still honours them — over-matching in the display layer. Sync's `includes()` is unaffected.
 - **Recommendation:** A one-line `UPDATE` in a future migration.
+- **Outcome:** **Not needed (2026-10-29).** Checked against the real NAS database — no `bin_types.summary_match` row contains `%` or `_`. No cleanup migration required; nothing to fix.
 - **Outcome:** **Not fixed — flagged to the user.** A blind cleanup migration risks a `UNIQUE` constraint failure on deploy if any two existing rows happen to strip to the same text, and this session has no visibility into the real NAS data's actual shape to judge that risk. Recommend checking which `bin_types.summary_match` rows (if any) contain `%` or `_` on the live database before deciding whether a cleanup migration is safe to write.
 
 #### S4 — Back up the NAS database before deploying
@@ -355,7 +357,7 @@ Updated alongside each task. Quality is good — real DOM, real `api()`, and the
 - [x] **M6:** Re-render property accordions after bin-type mutations — `13dd276`
 
 ### Post-merge improvements
-- [ ] m1: Confirm `bin_types.is_garden_waste` count on the NAS before deploying — **operational, flagged to user, not code-fixable this session**
+- [x] m1: Confirm `bin_types.is_garden_waste` count on the NAS before deploying — **checked (2026-10-29): `{ n: 1 }`, expected state, backfill is exact**
 - [x] m2, m7: Branch on `overallStatus: 'skipped'`/`'success'` rather than prose matching and a catch-all `else` — `7b5b85f`
 - [x] m3, m4: Clearer messaging for deferred scoped syncs and unknown properties — `929bd37`, `bb1b6b0`
 - [x] m5, m6: Stop renormalizing untouched summary text; reject bin-type Match text that spans an "and" boundary — `070e66d`, `a2b5161`
@@ -364,8 +366,8 @@ Updated alongside each task. Quality is good — real DOM, real `api()`, and the
 - [x] m10: Delete dead code and the stale comment — `6cc9ff3`
 - [x] S1: iCloud SUMMARY folding — implemented defensively (fold-on-write/unfold-on-read, fully testable without a live server) rather than deferred — `ee7da1b`
 - [x] S2: End-to-end migration-behaviour test — `55ff4de`
-- [ ] S3: Wildcard cleanup migration — **not applied**; judged too risky to write blind against unknown live data (a colliding pair of stripped values would fail the migration on deploy). Flagged to the user with a query to run on the NAS first
-- [ ] S4: NAS backup before deploy — **operational, flagged to user, not code-fixable this session**
+- [x] S3: Wildcard cleanup migration — **not needed (2026-10-29): checked the real NAS database, no `bin_types.summary_match` row contains `%` or `_`**
+- [ ] S4: NAS backup before deploy — **operational, still outstanding; back up `/volume1/docker/bin-calendar/data/bin-calendar.db` before this is deployed, since migration 009 is the first irreversible one (two `DROP COLUMN`s)**
 
 ---
 
