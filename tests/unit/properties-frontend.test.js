@@ -286,7 +286,10 @@ describe('properties.js - saving opt-in switches (#35 Task 7)', () => {
     expect(modal).not.toBeNull();
     expect(modal.textContent).toMatch(/Garden Waste/);
     expect(modal.textContent).toMatch(/Bulky Waste/);
-    expect(modal.textContent).toMatch(/2/);
+    // PR #37 review finding m9: /2/ alone is near-tautological (it would
+    // match plenty of incidental text) - pin down that it specifically
+    // names the count of turned-off collections.
+    expect(modal.textContent).toMatch(/2 collections/);
   });
 
   test('optInOffWarning_cancel_reChecksOnlyTheSwitchesThatWereTurnedOffAndNeverSaves', async () => {
@@ -333,7 +336,8 @@ describe('properties.js - saving opt-in switches (#35 Task 7)', () => {
     await window.loadSettings();
     window.document.getElementById('prop-opt-in-1-1').checked = false; // only Garden Waste turned off
     await window.savePropertyEdit(1);
-    await window.document.getElementById('opt-in-warning-confirm').onclick();
+    window.document.getElementById('opt-in-warning-confirm').click();
+    await flush();
 
     expect(window.document.querySelector('.modal-overlay')).toBeNull();
     const putCall = calls.find(c => c.method === 'PUT' && c.url === '/api/properties/1');
@@ -462,7 +466,8 @@ describe('properties.js - saving opt-in switches (#35 Task 7)', () => {
 
   test('optInOffWarning_afterConfirmCloses_escapeKeyNoLongerDoesAnything', async () => {
     const { window } = await openOptInOffWarning();
-    await window.document.getElementById('opt-in-warning-confirm').onclick();
+    window.document.getElementById('opt-in-warning-confirm').click();
+    await flush();
 
     expect(() => {
       window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
@@ -629,6 +634,63 @@ describe('properties.js - add-property form posts opted_in_bin_type_ids (#35 Tas
 
     const postCall = calls.find(c => c.method === 'POST' && c.url === '/api/properties');
     expect(postCall.body.opted_in_bin_type_ids).toEqual([]);
+  });
+});
+
+// PR #37 review finding m9: no test previously guarded the escaping on
+// any of this task's new surfaces - a bin type's label and colour are
+// both admin-controlled, user-editable fields that flow into the opt-in
+// switch (label text, and colour inside a style attribute) and into the
+// off-warning modal's title and body (which interpolate the label
+// directly). Reviewed as correct by reading the code; this is the
+// regression test that was missing to guard it going forward.
+describe('properties.js - XSS escaping on the new opt-in surfaces (PR #37 review m9)', () => {
+  const XSS_LABEL = '<img src=x onerror=alert(1)>';
+  const XSS_COLOUR = '"></span><script>alert(1)</script>';
+
+  test('buildOptInSwitches_withAnXssLabelAndColour_escapesBothRatherThanInjectingMarkup', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: XSS_LABEL, colour: XSS_COLOUR, requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.querySelector('#acc-add-prop script')).toBeNull();
+    expect(window.document.querySelectorAll('#acc-add-prop img').length).toBe(0);
+    const legend = window.document.querySelector('#acc-add-prop legend');
+    expect(legend.textContent).toBe('Opt-in collections');
+    const switchLabel = window.document.getElementById('add-opt-in-1').closest('label');
+    expect(switchLabel.textContent).toContain(XSS_LABEL);
+  });
+
+  test('showOptInOffWarning_withAnXssLabel_escapesItInBothTheTitleAndTheBody', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1],
+    };
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: XSS_LABEL, colour: '#92400e', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+    ]));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-opt-in-1-1').checked = false;
+    await window.savePropertyEdit(1);
+
+    const modal = window.document.querySelector('.modal-overlay');
+    expect(modal.querySelector('script')).toBeNull();
+    expect(modal.querySelectorAll('img').length).toBe(0);
+    expect(modal.textContent).toContain(XSS_LABEL);
   });
 });
 
