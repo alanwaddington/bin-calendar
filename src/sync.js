@@ -2,7 +2,7 @@ const { getDb } = require('./db');
 const { fetchIcs } = require('./ics');
 const google = require('./google');
 const icloud = require('./icloud');
-const { isGardenWaste, stripGardenWasteSegments } = require('./bin-types');
+const { matchesAnySegment, stripMatchingSegments } = require('./bin-types');
 
 async function runSync() {
   const db = getDb();
@@ -136,8 +136,8 @@ async function syncProperty(db, runId, property, gardenMatchers) {
 
     let added = 0, skipped = 0, deleted = 0, updated = 0;
     for (const event of events) {
-      const strippedSummary = stripGardenWasteSegments(event.summary, gardenMatchers);
-      const isGarden = isGardenWaste(event.summary, gardenMatchers);
+      const strippedSummary = stripMatchingSegments(event.summary, gardenMatchers);
+      const isGarden = matchesAnySegment(event.summary, gardenMatchers);
       const isPureGardenWaste = isGarden && strippedSummary === '';
       // A combined day whose garden-waste segment, once removed, still
       // leaves something behind (e.g. "Garden waste and general
