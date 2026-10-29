@@ -379,13 +379,13 @@ describe('getPropertyEventsRows', () => {
     ]);
   });
 
-  // #33: Garden Waste is a paid, opt-in add-on. A property that hasn't
-  // opted in must never see garden-waste rows in its own calendar, even
-  // though the local cache always holds them (so re-opting-in later needs
-  // no backfill wait).
-  test('getPropertyEventsRows_gardenWasteOptedOut_excludesGardenWasteRow', () => {
-    db.prepare("UPDATE bin_types SET is_garden_waste = 1 WHERE summary_match = 'Brown'").run();
-    db.prepare('UPDATE properties SET garden_waste_opted_in = 0 WHERE id = ?').run(propertyId);
+  // #35: opt-in is now per-bin-type, not Garden-Waste-only. A property
+  // that hasn't opted into a flagged bin type must never see its rows in
+  // its own calendar, even though the local cache always holds them (so
+  // opting in later needs no backfill wait).
+  test('getPropertyEventsRows_optedOutOfAFlaggedBinType_excludesItsRow', () => {
+    db.prepare("UPDATE bin_types SET requires_opt_in = 1 WHERE summary_match = 'Brown'").run();
+    // No opt-in row inserted for this property - opted out by absence.
     db.prepare(
       "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-garden', 'Brown Bin', '2026-11-05')"
     ).run(propertyId);
@@ -395,9 +395,10 @@ describe('getPropertyEventsRows', () => {
     expect(events).toEqual([]);
   });
 
-  test('getPropertyEventsRows_gardenWasteOptedIn_includesGardenWasteRow', () => {
-    db.prepare("UPDATE bin_types SET is_garden_waste = 1 WHERE summary_match = 'Brown'").run();
-    db.prepare('UPDATE properties SET garden_waste_opted_in = 1 WHERE id = ?').run(propertyId);
+  test('getPropertyEventsRows_optedIntoAFlaggedBinType_includesItsRow', () => {
+    db.prepare("UPDATE bin_types SET requires_opt_in = 1 WHERE summary_match = 'Brown'").run();
+    const brownId = db.prepare("SELECT id FROM bin_types WHERE summary_match = 'Brown'").get().id;
+    db.prepare('INSERT INTO property_bin_type_opt_ins (property_id, bin_type_id) VALUES (?, ?)').run(propertyId, brownId);
     db.prepare(
       "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-garden', 'Brown Bin', '2026-11-05')"
     ).run(propertyId);
@@ -408,14 +409,31 @@ describe('getPropertyEventsRows', () => {
     expect(events[0].label).toBe('Garden Waste (Brown Bin)');
   });
 
+  // A property can be opted into one flagged bin type but not another -
+  // each is gated independently.
+  test('getPropertyEventsRows_optedIntoOneFlaggedBinTypeButNotAnother_seesOnlyTheOptedInOne', () => {
+    db.prepare("UPDATE bin_types SET requires_opt_in = 1 WHERE summary_match IN ('Brown', 'Green')").run();
+    const brownId = db.prepare("SELECT id FROM bin_types WHERE summary_match = 'Brown'").get().id;
+    db.prepare('INSERT INTO property_bin_type_opt_ins (property_id, bin_type_id) VALUES (?, ?)').run(propertyId, brownId);
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-brown', 'Brown Bin', '2026-11-05')"
+    ).run(propertyId);
+    db.prepare(
+      "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-green', 'Green Bin', '2026-11-06')"
+    ).run(propertyId);
+
+    const events = getPropertyEventsRows(db, propertyId);
+
+    expect(events.map(e => e.uid)).toEqual(['u-brown']);
+  });
+
   // Real-world combined day: an opted-out property must still see the
-  // non-garden half of "Garden waste and general waste+food (...)" - the
+  // non-withheld half of "Brown waste and general waste+food (...)" - the
   // fan-out join already splits this into separate rows, so excluding the
-  // garden row must leave the general row intact rather than suppressing
+  // withheld row must leave the other match intact rather than suppressing
   // the whole event.
-  test('getPropertyEventsRows_gardenWasteOptedOutOnCombinedDay_stillReturnsTheNonGardenWasteHalf', () => {
-    db.prepare("UPDATE bin_types SET is_garden_waste = 1 WHERE summary_match = 'Brown'").run();
-    db.prepare('UPDATE properties SET garden_waste_opted_in = 0 WHERE id = ?').run(propertyId);
+  test('getPropertyEventsRows_optedOutOnCombinedDay_stillReturnsTheNonWithheldHalf', () => {
+    db.prepare("UPDATE bin_types SET requires_opt_in = 1 WHERE summary_match = 'Brown'").run();
     db.prepare(
       "INSERT INTO bin_types (summary_match, label, colour) VALUES ('waste+food', 'General Waste', '#6b7280')"
     ).run();
@@ -430,10 +448,9 @@ describe('getPropertyEventsRows', () => {
     expect(events[0].label).toBe('general waste+food (+food only after transition week)');
   });
 
-  // Non-garden-waste bin types must be completely unaffected by opt-in
-  // status - this is scoped to Garden Waste only.
-  test('getPropertyEventsRows_nonGardenWasteBinType_unaffectedByOptedOutStatus', () => {
-    db.prepare('UPDATE properties SET garden_waste_opted_in = 0 WHERE id = ?').run(propertyId);
+  // Bin types with requires_opt_in = 0 are completely unaffected - no opt-in
+  // row is ever needed for them regardless of what else is flagged.
+  test('getPropertyEventsRows_nonFlaggedBinType_unaffectedByOptInState', () => {
     db.prepare(
       "INSERT INTO events (property_id, uid, summary, start_date) VALUES (?, 'u-grey', 'Grey Bin', '2026-11-05')"
     ).run(propertyId);
