@@ -122,6 +122,64 @@ describe('server API', () => {
     expect(res.body.message).toMatch(/already in progress/i);
   });
 
+  // --- #35 Task 6: property-scoped sync endpoint ---
+
+  test('POST /api/properties/:id/sync calls runSync with the property id and returns its result', async () => {
+    runSync.mockResolvedValue({ status: 200, overallStatus: 'success', runId: 1, results: [{ propertyId: '42' }] });
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(runSync).toHaveBeenCalledWith('42');
+    expect(res.status).toBe(200);
+    expect(res.body.overallStatus).toBe('success');
+  });
+
+  test('POST /api/properties/:id/sync returns 429 when a sync is already running', async () => {
+    runSync.mockResolvedValue({ status: 429, message: 'Sync already in progress' });
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(res.status).toBe(429);
+    expect(res.body.message).toMatch(/already in progress/i);
+  });
+
+  // An EXISTING property with no credentials/calendar_id falls into
+  // runSync's own "Skipped - no properties configured" shape - never a
+  // misleading success, never a 500. A genuinely UNKNOWN property id is
+  // handled separately below (404, before runSync is even called) -
+  // PR #37 review finding m4: previously both cases returned this same
+  // 200 skip shape, making "property doesn't exist" indistinguishable
+  // from "property exists but isn't connected".
+  test('POST /api/properties/:id/sync with a disconnected (but existing) property returns the skipped shape, not a false success', async () => {
+    // PR #37 review finding m2: overallStatus: 'skipped' lets callers
+    // branch on a structured field instead of matching message prose.
+    runSync.mockResolvedValue({ status: 200, message: 'Skipped — no properties configured', overallStatus: 'skipped' });
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/Skipped/i);
+    expect(res.body.overallStatus).toBe('skipped');
+  });
+
+  test('POST /api/properties/:id/sync with an unknown property returns 404 and never calls runSync', async () => {
+    mockPrepare.get.mockReturnValueOnce(null); // SELECT id FROM properties WHERE id = ? finds nothing
+
+    const res = await request(app).post('/api/properties/999/sync');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(runSync).not.toHaveBeenCalled();
+  });
+
+  test('POST /api/properties/:id/sync returns 500 when runSync throws', async () => {
+    runSync.mockRejectedValue(new Error('Database locked'));
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(res.status).toBe(500);
+  });
+
   test('GET /api/sync/runs returns 200 with runs and results', async () => {
     const res = await request(app).get('/api/sync/runs');
 
@@ -188,67 +246,240 @@ describe('server API', () => {
     expect(res.body.error).toMatch(/Invalid ICS URL/i);
   });
 
-  // --- #33 Task 1: garden_waste_opted_in / is_garden_waste plumbing ---
+  // --- #35 Task 3: generalized opted_in_bin_type_ids plumbing ---
 
-  test('GET /api/properties selects garden_waste_opted_in', async () => {
-    await request(app).get('/api/properties');
+  test('GET /api/properties returns opted_in_bin_type_ids as an array per property, via one grouped query not one per property', async () => {
+    mockPrepare.all
+      .mockReturnValueOnce([
+        { id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google' },
+        { id: 2, label: 'Work', ics_url: 'https://example.com/cal2.ics', calendar_type: 'google' },
+      ])
+      .mockReturnValueOnce([
+        { property_id: 1, bin_type_id: 5 },
+        { property_id: 1, bin_type_id: 7 },
+      ]);
 
-    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('FROM properties'));
-    expect(sql).toMatch(/garden_waste_opted_in/);
+    const res = await request(app).get('/api/properties');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: 1, opted_in_bin_type_ids: [5, 7] });
+    expect(res.body[1]).toMatchObject({ id: 2, opted_in_bin_type_ids: [] });
+    // Exactly one .all() call for properties + one for ALL opt-in rows -
+    // not one additional query per property.
+    expect(mockPrepare.all).toHaveBeenCalledTimes(2);
   });
 
-  test('POST /api/properties with garden_waste_opted_in true persists 1', async () => {
+  test('POST /api/properties with opted_in_bin_type_ids persists an opt-in row for each id', async () => {
     const res = await request(app)
       .post('/api/properties')
-      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', garden_waste_opted_in: true });
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [5, 7] });
 
     expect(res.status).toBe(201);
-    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
-    expect(insertCall).toContain(1);
+    // run() call 0 is the property INSERT (-> lastInsertRowid 1), call 1 is
+    // replaceOptIns' DELETE (a no-op on a brand-new property, but it still
+    // runs - replaceOptIns is shared with PUT rather than duplicated); the
+    // opt-in insert statement is then prepared once and run() once per id.
+    expect(mockPrepare.run.mock.calls[2]).toEqual([1, 5]);
+    expect(mockPrepare.run.mock.calls[3]).toEqual([1, 7]);
+    expect(mockPrepare.run).toHaveBeenCalledTimes(4);
   });
 
-  test('POST /api/properties without garden_waste_opted_in defaults to 0', async () => {
+  test('POST /api/properties without opted_in_bin_type_ids creates the property with no opt-in rows', async () => {
     const res = await request(app)
       .post('/api/properties')
       .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google' });
 
     expect(res.status).toBe(201);
-    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
-    expect(insertCall).toContain(0);
+    // Only the property INSERT ran - replaceOptIns is never invoked at all
+    // when the field is omitted (distinct from an empty array, which DOES
+    // invoke it, just with zero rows to insert).
+    expect(mockPrepare.run).toHaveBeenCalledTimes(1);
   });
 
-  test('POST /api/properties with garden_waste_opted_in as string "false" coerces to 0, never 500s', async () => {
+  test('POST /api/properties with an empty opted_in_bin_type_ids array creates the property with no opt-in rows', async () => {
     const res = await request(app)
       .post('/api/properties')
-      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', garden_waste_opted_in: 'false' });
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [] });
 
     expect(res.status).toBe(201);
-    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
-    expect(insertCall).toContain(0);
+    // replaceOptIns runs (the DELETE), but the insert loop has zero
+    // iterations - no opt-in row is ever persisted.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(2);
   });
 
-  test('PUT /api/properties/:id with garden_waste_opted_in persists it', async () => {
+  test('PUT /api/properties/:id with opted_in_bin_type_ids replaces the opt-in set (delete then insert)', async () => {
     const res = await request(app)
       .put('/api/properties/1')
-      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', garden_waste_opted_in: true });
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [5] });
 
     expect(res.status).toBe(200);
-    const updateSql = mockPrepare.run.mock.calls.length
-      ? getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('UPDATE properties'))
-      : null;
-    expect(updateSql).toMatch(/garden_waste_opted_in/);
-    const updateCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
-    expect(updateCall).toContain(1);
+    const prepareSqls = getDb().prepare.mock.calls.map(c => c[0]);
+    expect(prepareSqls.some(sql => sql.includes('DELETE FROM property_bin_type_opt_ins'))).toBe(true);
+    expect(prepareSqls.some(sql => sql.includes('INSERT INTO property_bin_type_opt_ins'))).toBe(true);
   });
 
-  test('PUT /api/properties/:id without garden_waste_opted_in leaves the column untouched (preserves existing value)', async () => {
+  test('PUT /api/properties/:id without opted_in_bin_type_ids leaves the opt-in set completely untouched', async () => {
     const res = await request(app)
       .put('/api/properties/1')
       .send({ label: 'Home', ics_url: 'https://example.com/cal.ics' });
 
     expect(res.status).toBe(200);
-    const updateSql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('UPDATE properties'));
-    expect(updateSql).not.toMatch(/garden_waste_opted_in/);
+    const prepareSqls = getDb().prepare.mock.calls.map(c => c[0]);
+    expect(prepareSqls.some(sql => sql.includes('property_bin_type_opt_ins'))).toBe(false);
+  });
+
+  test('PUT /api/properties/:id with an empty opted_in_bin_type_ids array clears the opt-in set', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [] });
+
+    expect(res.status).toBe(200);
+    const prepareSqls = getDb().prepare.mock.calls.map(c => c[0]);
+    expect(prepareSqls.some(sql => sql.includes('DELETE FROM property_bin_type_opt_ins'))).toBe(true);
+    // run() call 0 is the label/ics_url UPDATE, call 1 is the DELETE - the
+    // insert statement is prepared (to set up the loop) but never run()
+    // since there are zero ids to insert.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(2);
+  });
+
+  // PR #35's Design Decision 5: PUT /api/properties/:id now accepts
+  // bin-type ids from the client - an id that doesn't exist raises
+  // SQLITE_CONSTRAINT_FOREIGNKEY, which must be caught and returned as
+  // 400, matching sanitiseBinTypeInput's existing SQLITE_CONSTRAINT_UNIQUE
+  // -> 409 treatment, never surfacing as a bare 500.
+  test('POST /api/properties with a non-existent bin_type_id returns 400, not 500', async () => {
+    mockPrepare.run
+      .mockImplementationOnce(() => ({ lastInsertRowid: 1 }))
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error('FOREIGN KEY constraint failed'), { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
+      });
+
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [999] });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('PUT /api/properties/:id with a non-existent bin_type_id returns 400, not 500', async () => {
+    mockPrepare.run
+      .mockImplementationOnce(() => ({ changes: 1 }))
+      .mockImplementationOnce(() => ({ changes: 1 }))
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error('FOREIGN KEY constraint failed'), { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
+      });
+
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [999] });
+
+    expect(res.status).toBe(400);
+  });
+
+  // The replacement is transactional - a partial failure (one bad id among
+  // several) must leave the PREVIOUS opt-in set intact, not a half-applied
+  // one. The shared db.transaction() mock in beforeEach executes fn
+  // synchronously, so a thrown error inside it propagates out exactly as
+  // better-sqlite3's real transaction() would on rollback - nothing after
+  // the failing statement runs.
+  test('PUT /api/properties/:id with a non-existent bin_type_id does not persist any of the other valid ids either', async () => {
+    mockPrepare.run
+      .mockImplementationOnce(() => ({ changes: 1 })) // label/ics_url update
+      .mockImplementationOnce(() => ({ changes: 1 })) // DELETE existing opt-ins
+      .mockImplementationOnce(() => ({ changes: 1 })) // INSERT valid id 5 - succeeds
+      .mockImplementationOnce(() => { // INSERT bad id 999 - fails
+        throw Object.assign(new Error('FOREIGN KEY constraint failed'), { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
+      });
+
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [5, 999] });
+
+    expect(res.status).toBe(400);
+    // Only 4 run() calls happened before the throw stopped execution - no
+    // further statements (e.g. a 3rd opt-in id, or anything after this
+    // route) ran once the transaction's callback threw.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(4);
+  });
+
+  // PR #37 review finding M3: a duplicate id in opted_in_bin_type_ids
+  // violated the (property_id, bin_type_id) composite PRIMARY KEY and
+  // surfaced as a raw SQLite 500 ("UNIQUE constraint failed") rather than
+  // being handled - duplicates are harmless client-side noise (e.g. a
+  // stray double-count), not a real error, so they're deduplicated
+  // before ever reaching SQL.
+  test('POST /api/properties with duplicate ids in opted_in_bin_type_ids deduplicates instead of erroring', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [5, 5, 7] });
+
+    expect(res.status).toBe(201);
+    // run() call 0 is the property INSERT, call 1 is replaceOptIns' DELETE,
+    // then exactly one INSERT per UNIQUE id - 3 total, not 4.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(4);
+    expect(mockPrepare.run.mock.calls[2]).toEqual([1, 5]);
+    expect(mockPrepare.run.mock.calls[3]).toEqual([1, 7]);
+  });
+
+  test('PUT /api/properties/:id with duplicate ids in opted_in_bin_type_ids deduplicates instead of erroring', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [5, 5] });
+
+    expect(res.status).toBe(200);
+    // run() call 0 is the label/ics_url UPDATE, call 1 is the DELETE, then
+    // exactly one INSERT for the deduplicated id.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(3);
+  });
+
+  // PR #37 review finding M3: a non-integer element (null, a string, an
+  // object) violated the bin_type_id NOT NULL/type constraints and also
+  // surfaced as a raw SQLite 500 - rejected with a clear 400 instead,
+  // before any SQL runs at all.
+  test('POST /api/properties with a non-integer element in opted_in_bin_type_ids returns 400, not 500', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [5, null] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/integer/i);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  test('PUT /api/properties/:id with a non-integer element in opted_in_bin_type_ids returns 400, not 500', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: ['not-a-number'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/integer/i);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  test('PUT /api/properties/:id with opted_in_bin_type_ids sent as a non-array returns 400, not a silent no-op', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: 'not-an-array' });
+
+    expect(res.status).toBe(400);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  // PR #37 review finding M3: PUT on an id that doesn't exist silently
+  // "succeeded" with 200 {ok:true} - the UPDATE's `changes` count is now
+  // checked to tell a real update apart from a no-op on a missing row.
+  test('PUT /api/properties/:id for a property that does not exist returns 404, not a false 200', async () => {
+    mockPrepare.run.mockImplementationOnce(() => ({ changes: 0 })); // UPDATE matched no row
+
+    const res = await request(app)
+      .put('/api/properties/999')
+      .send({ label: 'Ghost', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [5] });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    // The opt-in replacement must never run against a property that was
+    // never actually updated.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(1);
   });
 
   test('GET /api/google/auth-url/:propertyId returns auth URL when configured', async () => {
@@ -903,23 +1134,25 @@ describe('server API', () => {
     expect(sql).toMatch(/e\.end_date\s+IS\s+NOT\s+NULL\s+AND\s+e\.end_date\s*>\s*date\('now'\)/i);
   });
 
-  test('getNextCollection_sqlSelectsIsGardenWasteAndOptedInFlags', async () => {
+  test('getNextCollection_sqlSelectsRequiresOptInAndOptInJoin', async () => {
     mockPrepare.all.mockReturnValueOnce([]);
 
     await request(app).get('/api/next-collection');
 
     const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
-    expect(sql).toMatch(/is_garden_waste/);
-    expect(sql).toMatch(/garden_waste_opted_in/);
+    expect(sql).toMatch(/requires_opt_in/);
+    expect(sql).toMatch(/property_bin_type_opt_ins/);
   });
 
-  // #33: Garden Waste is a paid, opt-in add-on - excluded from display for
-  // any property that hasn't opted in.
-  test('getNextCollection_gardenWasteOptedOut_excludesGardenWasteRow', async () => {
+  // #35: opt-in is a per-bin-type property, not Garden-Waste-only -
+  // excluded from display for any flagged bin type a property hasn't
+  // opted into. optInBinTypeId is null (LEFT JOIN found no matching row)
+  // when not opted in, and holds the bin_type id when opted in.
+  test('getNextCollection_optedOutOfAFlaggedBinType_excludesItsRow', async () => {
     mockPrepare.all.mockReturnValueOnce([
       {
         date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
-        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', requires_opt_in: 1, optInBinTypeId: null,
         property_id: 1, property_label: 'Home',
       },
     ]);
@@ -929,11 +1162,11 @@ describe('server API', () => {
     expect(res.body.collections).toHaveLength(0);
   });
 
-  test('getNextCollection_gardenWasteOptedIn_includesGardenWasteRow', async () => {
+  test('getNextCollection_optedIntoAFlaggedBinType_includesItsRow', async () => {
     mockPrepare.all.mockReturnValueOnce([
       {
         date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
-        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 1,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', requires_opt_in: 1, optInBinTypeId: 3,
         property_id: 1, property_label: 'Home',
       },
     ]);
@@ -944,21 +1177,21 @@ describe('server API', () => {
     expect(res.body.collections[0].colour).toBe('#92400e');
   });
 
-  // The excluded garden-waste row sits on the SAME nearest date as a
-  // non-garden row (the real "X and Y" combined-day case, already split
-  // into separate rows by the fan-out join) - excluding it must not
-  // suppress the still-valid non-garden collection for that date.
-  test('getNextCollection_gardenWasteOptedOutOnCombinedDay_stillShowsTheNonGardenWasteRowForThatDate', async () => {
+  // The excluded row sits on the SAME nearest date as a non-withheld row
+  // (the real "X and Y" combined-day case, already split into separate
+  // rows by the fan-out join) - excluding it must not suppress the
+  // still-valid collection for that date.
+  test('getNextCollection_optedOutOnCombinedDay_stillShowsTheNonWithheldRowForThatDate', async () => {
     const summary = 'Garden waste and general waste+food (+food only after transition week)';
     mockPrepare.all.mockReturnValueOnce([
       {
         date: '2026-11-26', endDate: null, days_until: 5, summary,
-        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', requires_opt_in: 1, optInBinTypeId: null,
         property_id: 1, property_label: 'Home',
       },
       {
         date: '2026-11-26', endDate: null, days_until: 5, summary,
-        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'waste+food', is_garden_waste: 0, garden_waste_opted_in: 0,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'waste+food', requires_opt_in: 0, optInBinTypeId: null,
         property_id: 1, property_label: 'Home',
       },
     ]);
@@ -970,19 +1203,19 @@ describe('server API', () => {
     expect(res.body.collections[0].label).toBe('general waste+food (+food only after transition week)');
   });
 
-  // The nearest date's ONLY row is an excluded garden-waste one, but a
-  // later date has a real (non-garden) collection - the property must
-  // advance to that later date, not report no collection at all.
-  test('getNextCollection_gardenWasteOptedOutIsOnlyRowOnNearestDate_advancesToLaterNonGardenDate', async () => {
+  // The nearest date's ONLY row is an excluded one, but a later date has a
+  // real (non-withheld) collection - the property must advance to that
+  // later date, not report no collection at all.
+  test('getNextCollection_optedOutIsOnlyRowOnNearestDate_advancesToLaterNonWithheldDate', async () => {
     mockPrepare.all.mockReturnValueOnce([
       {
         date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
-        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', requires_opt_in: 1, optInBinTypeId: null,
         property_id: 1, property_label: 'Home',
       },
       {
         date: '2026-11-07', endDate: null, days_until: 7, summary: 'Grey Bin',
-        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Grey', is_garden_waste: 0, garden_waste_opted_in: 0,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Grey', requires_opt_in: 0, optInBinTypeId: null,
         property_id: 1, property_label: 'Home',
       },
     ]);
@@ -1102,19 +1335,47 @@ describe('server API', () => {
     expect(res.status).toBe(400);
   });
 
-  // --- #33 Task 1: is_garden_waste plumbing ---
-
-  test('postBinType_withIsGardenWasteTrue_persists1', async () => {
+  // PR #37 review finding m6: sync.js's opt-in gating matches each "and"-
+  // separated segment of a combined-day summary independently
+  // (matchesAnySegment/stripMatchingSegments), while the display layer's
+  // fan-out join matches against the WHOLE summary - so a Match text that
+  // itself spans an "and" boundary could match in the display layer but
+  // never match in sync (a per-segment check can never match text that
+  // crosses the separator it splits on), silently withholding on the
+  // calendar what the UI still shows. Rejecting such Match text at the
+  // boundary prevents that divergence from ever being created, rather
+  // than reconciling the two matching algorithms after the fact.
+  test('postBinType_withSummaryMatchContainingAndSeparator_returns400', async () => {
     const res = await request(app)
       .post('/api/bin-types')
-      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: true });
+      .send({ summary_match: 'Trolley and bin', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/and/i);
+  });
+
+  test('putBinType_withSummaryMatchContainingAndSeparator_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Trolley AND bin', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/and/i);
+  });
+
+  // --- #35 Task 3: requires_opt_in plumbing (generalized from is_garden_waste) ---
+
+  test('postBinType_withRequiresOptInTrue_persists1', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: true });
 
     expect(res.status).toBe(201);
     const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Garden'));
     expect(insertCall).toContain(1);
   });
 
-  test('postBinType_withoutIsGardenWaste_defaultsTo0', async () => {
+  test('postBinType_withoutRequiresOptIn_defaultsTo0', async () => {
     const res = await request(app)
       .post('/api/bin-types')
       .send({ summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' });
@@ -1124,12 +1385,12 @@ describe('server API', () => {
     expect(insertCall).toContain(0);
   });
 
-  test('putBinType_withIsGardenWasteTrue_persists1', async () => {
+  test('putBinType_withRequiresOptInTrue_persists1', async () => {
     mockPrepare.run.mockReturnValueOnce({ changes: 1 });
 
     const res = await request(app)
       .put('/api/bin-types/1')
-      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: true });
+      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: true });
 
     expect(res.status).toBe(200);
     const updateCall = mockPrepare.run.mock.calls.find(args => args.includes('Garden'));

@@ -48,11 +48,23 @@ function registerView(name, loader) {
 }
 
 // ── Toast notifications ────────────────────────────────────────────────────
+// PR #37 review finding M5: a save can now fire several toasts in quick
+// succession (e.g. "Property updated", "Syncing…", then a result toast),
+// and each toast previously rendered as its own fixed-position element at
+// the same coordinates - visually overlapping. All toasts share one
+// stacking container, created lazily on first use.
 function showToast(msg, type = 'success') {
+  let stack = document.getElementById('toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toast-stack';
+    stack.className = 'toast-stack';
+    document.body.appendChild(stack);
+  }
   const t = document.createElement('div');
   t.className = `toast toast-${type}`;
   t.textContent = msg;
-  document.body.appendChild(t);
+  stack.appendChild(t);
   setTimeout(() => {
     t.classList.add('toast-exit');
     t.addEventListener('animationend', () => t.remove(), { once: true });

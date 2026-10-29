@@ -21,10 +21,48 @@ async function fetchCalendars(appleId, appPassword) {
   return collections.map(c => ({ displayName: c.displayName, url: c.url }));
 }
 
+// PR #37 review suggestion S1: RFC 5545 §3.1 content lines SHOULD be
+// folded at or before 75 octets, by inserting CRLF followed by a single
+// leading space/tab before continuing. Without this, a long SUMMARY (the
+// real East Ayrshire combined-day text comfortably exceeds the limit
+// once "SUMMARY:" itself is counted in) risked being folded by the
+// CalDAV SERVER on storage instead - which a single-line regex can't see
+// past, so the compare-before-write check in sync.js would never find a
+// match and rewrite the event on every single run. Folding here keeps
+// bin-calendar in control of exactly where any fold lands. Byte-exact
+// (not character-exact) so it round-trips perfectly with unfoldLines()
+// regardless of where a split lands.
+const MAX_LINE_OCTETS = 75;
+
+function foldLine(line) {
+  const bytes = Buffer.from(line, 'utf8');
+  if (bytes.length <= MAX_LINE_OCTETS) return line;
+  const parts = [];
+  let start = 0;
+  let limit = MAX_LINE_OCTETS;
+  while (start < bytes.length) {
+    let end = Math.min(start + limit, bytes.length);
+    // Never split a multi-octet UTF-8 sequence - back off to the nearest
+    // byte that isn't a continuation byte (10xxxxxx).
+    while (end > start && (bytes[end] & 0xc0) === 0x80) end--;
+    parts.push(bytes.subarray(start, end).toString('utf8'));
+    start = end;
+    limit = MAX_LINE_OCTETS - 1; // each continuation line loses 1 octet to its own leading space
+  }
+  return parts.join('\r\n ');
+}
+
+// The inverse of foldLine(): CRLF immediately followed by a single space
+// or tab is a fold marker, not a real line break - remove it to recover
+// the original unfolded content line before any field is parsed out of
+// data a CalDAV server returned (UID, SUMMARY, or anything else).
+function unfoldLines(iCalString) {
+  return iCalString == null ? iCalString : iCalString.replace(/\r\n[ \t]/g, '');
+}
+
 // #33: deletion needs each object's url/etag (deleteCalendarObject's own
-// requirement), which listEventUids has always discarded after parsing out
-// just the uid. listEventUids is re-expressed in terms of this so both
-// stay in agreement about what counts as "present".
+// requirement), which is why this returns the full dav object per uid
+// rather than just a set of uids.
 async function listEventObjects(property, timeMin, timeMax) {
   const creds = decryptJson(property.credentials);
   const client = await createClient(creds);
@@ -34,15 +72,10 @@ async function listEventObjects(property, timeMin, timeMax) {
   });
   const byUid = new Map();
   for (const obj of objects) {
-    const match = obj.data?.match(/^UID:(.+)$/m);
+    const match = unfoldLines(obj.data)?.match(/^UID:(.+)$/m);
     if (match) byUid.set(match[1].trim(), obj);
   }
   return byUid;
-}
-
-async function listEventUids(property, timeMin, timeMax) {
-  const objects = await listEventObjects(property, timeMin, timeMax);
-  return new Set(objects.keys());
 }
 
 function buildVCalendarString(event) {
@@ -58,7 +91,7 @@ function buildVCalendarString(event) {
     event.description ? `DESCRIPTION:${event.description}` : '',
     'END:VEVENT',
     'END:VCALENDAR',
-  ].filter(Boolean).join('\r\n');
+  ].filter(Boolean).map(foldLine).join('\r\n');
 }
 
 async function insertEvent(property, event) {
@@ -127,7 +160,7 @@ async function deleteEvent(property, davObject) {
 // single sync run (which would needlessly bump its etag/sequence on the
 // user's own devices for no actual change).
 function extractSummary(iCalString) {
-  const match = iCalString?.match(/^SUMMARY:(.+)$/m);
+  const match = unfoldLines(iCalString)?.match(/^SUMMARY:(.+)$/m);
   return match ? match[1].trim() : null;
 }
 
@@ -146,4 +179,4 @@ async function checkCredentials(property) {
   }
 }
 
-module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, updateEvent, deleteEvent, extractSummary, checkCredentials };
+module.exports = { fetchCalendars, listEventObjects, insertEvent, updateEvent, deleteEvent, extractSummary, checkCredentials };

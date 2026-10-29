@@ -2,8 +2,8 @@ const {
   stripParentheticals,
   matchesOutsideParentheses,
   splitSummarySegments,
-  isGardenWaste,
-  stripGardenWasteSegments,
+  matchesAnySegment,
+  stripMatchingSegments,
 } = require('../../src/bin-types');
 
 describe('stripParentheticals', () => {
@@ -64,28 +64,28 @@ describe('splitSummarySegments', () => {
   });
 });
 
-describe('isGardenWaste', () => {
-  test('isGardenWaste_pureGardenWasteSummary_returnsTrue', () => {
-    expect(isGardenWaste('Garden waste', ['Garden'])).toBe(true);
+describe('matchesAnySegment', () => {
+  test('matchesAnySegment_pureGardenWasteSummary_returnsTrue', () => {
+    expect(matchesAnySegment('Garden waste', ['Garden'])).toBe(true);
   });
 
-  test('isGardenWaste_combinedWithGeneralWaste_returnsTrue', () => {
+  test('matchesAnySegment_combinedWithGeneralWaste_returnsTrue', () => {
     const summary = 'Garden waste and general waste+food (+food only after transition week)';
-    expect(isGardenWaste(summary, ['Garden'])).toBe(true);
+    expect(matchesAnySegment(summary, ['Garden'])).toBe(true);
   });
 
-  test('isGardenWaste_generalWasteOnly_returnsFalse', () => {
-    expect(isGardenWaste('General waste+food (+food only after transition week)', ['Garden'])).toBe(false);
+  test('matchesAnySegment_generalWasteOnly_returnsFalse', () => {
+    expect(matchesAnySegment('General waste+food (+food only after transition week)', ['Garden'])).toBe(false);
   });
 
   // Inherits the parenthetical-exclusion fix: a garden matcher that only
   // appears inside an unrelated caveat must not falsely flag the event.
-  test('isGardenWaste_matcherOnlyInsideParentheses_returnsFalse', () => {
-    expect(isGardenWaste('General waste (garden path closed)', ['garden'])).toBe(false);
+  test('matchesAnySegment_matcherOnlyInsideParentheses_returnsFalse', () => {
+    expect(matchesAnySegment('General waste (garden path closed)', ['garden'])).toBe(false);
   });
 
-  test('isGardenWaste_nonGardenSummary_returnsFalse', () => {
-    expect(isGardenWaste('Trolley+food', ['Garden'])).toBe(false);
+  test('matchesAnySegment_nonGardenSummary_returnsFalse', () => {
+    expect(matchesAnySegment('Trolley+food', ['Garden'])).toBe(false);
   });
 
   // PR #34 review finding C1 (regression): this is the exact real-world
@@ -94,38 +94,38 @@ describe('isGardenWaste', () => {
   // flagged as Garden Waste. Before the fix, matchers=[''] made every event
   // classify as Garden Waste, which sync.js then treated as "delete this
   // from the user's real calendar" for every opted-out property.
-  test('isGardenWaste_blankMatcherInList_neverMatchesAnything', () => {
-    expect(isGardenWaste('Grey Bin', [''])).toBe(false);
-    expect(isGardenWaste('Trolley+food', [''])).toBe(false);
-    expect(isGardenWaste('Transition week', [''])).toBe(false);
+  test('matchesAnySegment_blankMatcherInList_neverMatchesAnything', () => {
+    expect(matchesAnySegment('Grey Bin', [''])).toBe(false);
+    expect(matchesAnySegment('Trolley+food', [''])).toBe(false);
+    expect(matchesAnySegment('Transition week', [''])).toBe(false);
   });
 
-  test('isGardenWaste_blankMatcherAlongsideARealOne_stillMatchesOnTheRealOne', () => {
-    expect(isGardenWaste('Garden waste', ['', 'Garden'])).toBe(true);
-    expect(isGardenWaste('Grey Bin', ['', 'Garden'])).toBe(false);
+  test('matchesAnySegment_blankMatcherAlongsideARealOne_stillMatchesOnTheRealOne', () => {
+    expect(matchesAnySegment('Garden waste', ['', 'Garden'])).toBe(true);
+    expect(matchesAnySegment('Grey Bin', ['', 'Garden'])).toBe(false);
   });
 });
 
-describe('stripGardenWasteSegments', () => {
-  test('stripGardenWasteSegments_combinedDay_removesOnlyTheGardenWasteSegment', () => {
+describe('stripMatchingSegments', () => {
+  test('stripMatchingSegments_combinedDay_removesOnlyTheGardenWasteSegment', () => {
     const summary = 'Garden waste and general waste+food (+food only after transition week)';
-    expect(stripGardenWasteSegments(summary, ['Garden'])).toBe('general waste+food (+food only after transition week)');
+    expect(stripMatchingSegments(summary, ['Garden'])).toBe('general waste+food (+food only after transition week)');
   });
 
-  test('stripGardenWasteSegments_pureGardenWaste_returnsEmptyString', () => {
-    expect(stripGardenWasteSegments('Garden waste', ['Garden'])).toBe('');
+  test('stripMatchingSegments_pureGardenWaste_returnsEmptyString', () => {
+    expect(stripMatchingSegments('Garden waste', ['Garden'])).toBe('');
   });
 
-  test('stripGardenWasteSegments_noGardenWastePresent_returnsSummaryUnchanged', () => {
-    expect(stripGardenWasteSegments('Trolley+food', ['Garden'])).toBe('Trolley+food');
+  test('stripMatchingSegments_noGardenWastePresent_returnsSummaryUnchanged', () => {
+    expect(stripMatchingSegments('Trolley+food', ['Garden'])).toBe('Trolley+food');
   });
 
   // PR #34 review finding C1 (regression): a blank matcher must never
-  // strip anything - this is what previously made stripGardenWasteSegments
+  // strip anything - this is what previously made stripMatchingSegments
   // return '' for EVERY summary, which sync.js read as "pure garden
   // waste" for literally every event.
-  test('stripGardenWasteSegments_blankMatcherInList_neverStripsAnything', () => {
-    expect(stripGardenWasteSegments('Grey Bin', [''])).toBe('Grey Bin');
-    expect(stripGardenWasteSegments('Transition week', [''])).toBe('Transition week');
+  test('stripMatchingSegments_blankMatcherInList_neverStripsAnything', () => {
+    expect(stripMatchingSegments('Grey Bin', [''])).toBe('Grey Bin');
+    expect(stripMatchingSegments('Transition week', [''])).toBe('Transition week');
   });
 });
