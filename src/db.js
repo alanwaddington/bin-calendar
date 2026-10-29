@@ -35,10 +35,25 @@ function applyMigrations() {
     const version = parseInt(file, 10);
     if (applied.includes(version)) continue;
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-    db.exec(sql);
-    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(version);
+    applyMigration(version, sql);
     console.log(`Applied migration ${file}`);
   }
+}
+
+// #35 Task 1 - Design Decision 7: previously this was db.exec(sql) called
+// directly with no transaction. Prototyped during /design: a failing
+// migration left partial DDL applied and the connection in an open
+// transaction - correctness depended on the process dying before anything
+// else touched the database, not on an explicit rollback. Not acceptable
+// once a migration can drop columns (009 is the first). Wrapping the DDL
+// and its schema_version row in one transaction means either both happen
+// or neither does. Exported so this guarantee is directly testable without
+// needing a crafted bad file in the real migrations/ directory.
+function applyMigration(version, sql) {
+  db.transaction(() => {
+    db.exec(sql);
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(version);
+  })();
 }
 
 function recoverInterruptedSyncs() {
@@ -51,4 +66,4 @@ function recoverInterruptedSyncs() {
   }
 }
 
-module.exports = { initDb, getDb };
+module.exports = { initDb, getDb, applyMigration };
