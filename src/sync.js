@@ -64,7 +64,11 @@ async function runSync(propertyId = null) {
 
     if (properties.length === 0) {
       updateRun('skipped');
-      return { status: 200, message: 'Skipped — no properties configured' };
+      // PR #37 review finding m2: a structured overallStatus field, not
+      // just free-text message prose, so callers (frontend and dashboard)
+      // can branch on skip state reliably instead of string-matching
+      // copy that's free to be reworded independently.
+      return { status: 200, message: 'Skipped — no properties configured', overallStatus: 'skipped' };
     }
 
     // #35: generalized from "bin_types is global, not per-property" (PR

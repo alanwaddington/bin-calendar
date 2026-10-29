@@ -1766,6 +1766,16 @@ describe('sync', () => {
 
     expect(result.status).toBe(200);
     expect(result.message).toMatch(/Skipped/i);
-    expect(result.overallStatus).toBeUndefined();
+    // PR #37 review finding m2: callers previously had to string-match
+    // `message` to detect a skip - reword that prose and the check
+    // silently breaks. overallStatus: 'skipped' is a structured field
+    // that can't drift out from under callers that way.
+    expect(result.overallStatus).toBe('skipped');
+  });
+
+  test('runSync_withNoProperties_returnsOverallStatusSkipped', async () => {
+    const result = await runSync();
+
+    expect(result.overallStatus).toBe('skipped');
   });
 });

@@ -147,13 +147,15 @@ describe('server API', () => {
   // exactly the existing "Skipped - no properties configured" shape -
   // never a misleading success, never a 500.
   test('POST /api/properties/:id/sync with an unknown or disconnected property returns the skipped shape, not a false success', async () => {
-    runSync.mockResolvedValue({ status: 200, message: 'Skipped — no properties configured' });
+    // PR #37 review finding m2: overallStatus: 'skipped' lets callers
+    // branch on a structured field instead of matching message prose.
+    runSync.mockResolvedValue({ status: 200, message: 'Skipped — no properties configured', overallStatus: 'skipped' });
 
     const res = await request(app).post('/api/properties/999/sync');
 
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/Skipped/i);
-    expect(res.body.overallStatus).toBeUndefined();
+    expect(res.body.overallStatus).toBe('skipped');
   });
 
   test('POST /api/properties/:id/sync returns 500 when runSync throws', async () => {

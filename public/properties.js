@@ -493,13 +493,22 @@ async function triggerScopedSync(id, label) {
   showToast(`Syncing ${label}…`);
   try {
     const result = await api('POST', `/api/properties/${id}/sync`);
-    if (result.message && result.message.startsWith('Skipped')) {
+    // PR #37 review finding m2: branches on the structured overallStatus
+    // field rather than matching message prose - sync.js's skip message
+    // wording is free to change without silently breaking this check.
+    if (result.overallStatus === 'skipped') {
       showToast(`${label} isn't connected to a calendar yet — nothing synced`, 'info');
+    } else if (result.overallStatus === 'success') {
+      // PR #37 review finding m7: success is only ever reported for an
+      // explicit 'success' - any other/unrecognised value (including a
+      // future 'partial') falls through to the warning branch below
+      // rather than silently defaulting to success.
+      showToast(`${label} synced`);
     } else if (result.overallStatus === 'failed') {
       const err = result.results?.[0]?.error;
       showToast(`Sync failed for ${label}${err ? ': ' + err : ''}`, 'error');
     } else {
-      showToast(`${label} synced`);
+      showToast(`Sync finished with an unexpected status for ${label}`, 'error');
     }
   } catch (err) {
     showToast(err.message === 'HTTP 429' ? `A sync is already in progress — try ${label} again shortly.` : err.message, 'error');

@@ -427,13 +427,39 @@ describe('properties.js - scoped sync toast sequence (#35 Task 7)', () => {
 
   test('scopedSyncSkippedBecauseNotConnected_doesNotShowASuccessToast', async () => {
     const { window } = await saveWithOptInToggledOn(
-      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, message: 'Skipped — no properties configured' } }
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, message: 'Skipped — no properties configured', overallStatus: 'skipped' } }
     );
     await flush();
 
     expect([...window.document.querySelectorAll('.toast-success')].some(t => /synced/i.test(t.textContent))).toBe(false);
     const infoToast = [...window.document.querySelectorAll('.toast-info')].find(t => /Home/.test(t.textContent));
     expect(infoToast).toBeDefined();
+  });
+
+  // PR #37 review finding m2: detection must key off the structured
+  // overallStatus field, not string-match the message prose - reworded
+  // message text here proves the check isn't coupled to that copy.
+  test('scopedSyncSkipped_detectionDoesNotDependOnTheMessageWording', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, message: 'Nothing to do here', overallStatus: 'skipped' } }
+    );
+    await flush();
+
+    expect([...window.document.querySelectorAll('.toast-success')].some(t => /synced/i.test(t.textContent))).toBe(false);
+    const infoToast = [...window.document.querySelectorAll('.toast-info')].find(t => /Home/.test(t.textContent));
+    expect(infoToast).toBeDefined();
+  });
+
+  // PR #37 review finding m7: an unrecognised overallStatus must never
+  // fall into the success branch by default - only an explicit 'success'
+  // should ever show a success toast.
+  test('scopedSyncWithAnUnrecognisedOverallStatus_doesNotShowASuccessToast', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, runId: 1, overallStatus: 'partial', results: [{ propertyId: 1 }] } }
+    );
+    await flush();
+
+    expect([...window.document.querySelectorAll('.toast-success')].some(t => /synced/i.test(t.textContent))).toBe(false);
   });
 
   test('scopedSyncRejectedBecauseAnotherSyncIsRunning_showsAnErrorToast', async () => {
