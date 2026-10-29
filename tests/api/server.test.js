@@ -1335,6 +1335,34 @@ describe('server API', () => {
     expect(res.status).toBe(400);
   });
 
+  // PR #37 review finding m6: sync.js's opt-in gating matches each "and"-
+  // separated segment of a combined-day summary independently
+  // (matchesAnySegment/stripMatchingSegments), while the display layer's
+  // fan-out join matches against the WHOLE summary - so a Match text that
+  // itself spans an "and" boundary could match in the display layer but
+  // never match in sync (a per-segment check can never match text that
+  // crosses the separator it splits on), silently withholding on the
+  // calendar what the UI still shows. Rejecting such Match text at the
+  // boundary prevents that divergence from ever being created, rather
+  // than reconciling the two matching algorithms after the fact.
+  test('postBinType_withSummaryMatchContainingAndSeparator_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Trolley and bin', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/and/i);
+  });
+
+  test('putBinType_withSummaryMatchContainingAndSeparator_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Trolley AND bin', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/and/i);
+  });
+
   // --- #35 Task 3: requires_opt_in plumbing (generalized from is_garden_waste) ---
 
   test('postBinType_withRequiresOptInTrue_persists1', async () => {

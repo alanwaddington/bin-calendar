@@ -585,6 +585,17 @@ function sanitiseBinTypeInput(body) {
   // event). Strip first, then reject if nothing meaningful remains.
   const strippedMatch = summary_match.replace(/[%_]/g, '').trim();
   if (!strippedMatch) return { error: 'Invalid match text: must contain at least one non-wildcard character' };
+  // PR #37 review finding m6: sync.js's opt-in gating (matchesAnySegment/
+  // stripMatchingSegments) matches each "and"-separated segment of a
+  // combined-day summary independently - a Match text that itself spans
+  // an "and" boundary can never match under that per-segment model, even
+  // when the display layer's whole-summary LIKE join would still match
+  // it. That divergence would silently withhold on the real calendar
+  // what the UI still shows as present, so it's rejected here rather
+  // than reconciled after the fact between the two matching algorithms.
+  if (/\s+and\s+/i.test(strippedMatch)) {
+    return { error: 'Invalid match text: must not contain "and" - combined-day summaries are split on it, so a match spanning that boundary could never match' };
+  }
   return { summary_match: strippedMatch, label, colour, requires_opt_in: toBoolInt(requires_opt_in) };
 }
 
