@@ -43,6 +43,57 @@ function createCalendarWindow(fetchImpl, { includeDashboard = true } = {}) {
   return window;
 }
 
+// Same idea as createCalendarWindow, but loads properties.js for Settings
+// page tests instead of calendar.js/dashboard.js.
+function createSettingsWindow(fetchImpl) {
+  const dom = new JSDOM(`
+    <nav>
+      <a class="nav-link" data-view="dashboard"></a>
+      <a class="nav-link" data-view="settings"></a>
+    </nav>
+    <div id="view-dashboard" class="view"></div>
+    <div id="view-settings" class="view hidden"></div>
+  `, { url: 'http://localhost/', runScripts: 'outside-only' });
+
+  const { window } = dom;
+  window.fetch = fetchImpl;
+
+  window.eval(fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8'));
+  // app.js declares `let CONFIG = {}` at top level - block-scoped
+  // declarations never become properties of the global object, and each
+  // window.eval() call gets its own declarative scope, so properties.js's
+  // own eval (next line) can't see app.js's CONFIG binding at all (unlike
+  // a real browser, where every <script> tag shares one global scope).
+  // Forcing it onto `window` here bridges that gap exactly as a browser
+  // would, without changing any production source.
+  window.CONFIG = window.CONFIG || {};
+  window.eval(fs.readFileSync(path.join(PUBLIC_DIR, 'properties.js'), 'utf8'));
+
+  _openWindows.push(window);
+  return window;
+}
+
+// Same idea as createCalendarWindow, but loads logs.js for Logs page tests.
+function createLogsWindow(fetchImpl) {
+  const dom = new JSDOM(`
+    <nav>
+      <a class="nav-link" data-view="dashboard"></a>
+      <a class="nav-link" data-view="logs"></a>
+    </nav>
+    <div id="view-dashboard" class="view"></div>
+    <div id="view-logs" class="view hidden"></div>
+  `, { url: 'http://localhost/', runScripts: 'outside-only' });
+
+  const { window } = dom;
+  window.fetch = fetchImpl;
+
+  window.eval(fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8'));
+  window.eval(fs.readFileSync(path.join(PUBLIC_DIR, 'logs.js'), 'utf8'));
+
+  _openWindows.push(window);
+  return window;
+}
+
 // jsdom windows keep internal timers alive until closed, which otherwise
 // leaves Jest's process hanging after the run completes. Call this from an
 // afterEach in any test file using createCalendarWindow.
@@ -62,4 +113,23 @@ function mockFetch(routes) {
   };
 }
 
-module.exports = { createCalendarWindow, mockFetch, closeAllCalendarWindows };
+// Method-aware router for tests that need to tell apart e.g. GET and PUT to
+// the same URL, or inspect the request body - mockFetch() above only
+// matches on URL and ignores method/body entirely.
+function mockRouterFetch(routes, calls = []) {
+  return async (url, opts = {}) => {
+    const method = (opts.method || 'GET').toUpperCase();
+    for (const route of routes) {
+      const urlMatches = typeof route.url === 'string' ? url === route.url : route.url.test(url);
+      if (urlMatches && route.method === method) {
+        const body = opts.body ? JSON.parse(opts.body) : undefined;
+        calls.push({ method, url, body });
+        const responseBody = typeof route.body === 'function' ? route.body() : route.body;
+        return { ok: route.ok !== false, json: async () => responseBody };
+      }
+    }
+    throw new Error(`No mock route for ${method} ${url}`);
+  };
+}
+
+module.exports = { createCalendarWindow, createSettingsWindow, createLogsWindow, mockFetch, mockRouterFetch, closeAllCalendarWindows };

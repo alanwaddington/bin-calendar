@@ -188,6 +188,69 @@ describe('server API', () => {
     expect(res.body.error).toMatch(/Invalid ICS URL/i);
   });
 
+  // --- #33 Task 1: garden_waste_opted_in / is_garden_waste plumbing ---
+
+  test('GET /api/properties selects garden_waste_opted_in', async () => {
+    await request(app).get('/api/properties');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('FROM properties'));
+    expect(sql).toMatch(/garden_waste_opted_in/);
+  });
+
+  test('POST /api/properties with garden_waste_opted_in true persists 1', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', garden_waste_opted_in: true });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(insertCall).toContain(1);
+  });
+
+  test('POST /api/properties without garden_waste_opted_in defaults to 0', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(insertCall).toContain(0);
+  });
+
+  test('POST /api/properties with garden_waste_opted_in as string "false" coerces to 0, never 500s', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', garden_waste_opted_in: 'false' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(insertCall).toContain(0);
+  });
+
+  test('PUT /api/properties/:id with garden_waste_opted_in persists it', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', garden_waste_opted_in: true });
+
+    expect(res.status).toBe(200);
+    const updateSql = mockPrepare.run.mock.calls.length
+      ? getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('UPDATE properties'))
+      : null;
+    expect(updateSql).toMatch(/garden_waste_opted_in/);
+    const updateCall = mockPrepare.run.mock.calls.find(args => args.includes('Home'));
+    expect(updateCall).toContain(1);
+  });
+
+  test('PUT /api/properties/:id without garden_waste_opted_in leaves the column untouched (preserves existing value)', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics' });
+
+    expect(res.status).toBe(200);
+    const updateSql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('UPDATE properties'));
+    expect(updateSql).not.toMatch(/garden_waste_opted_in/);
+  });
+
   test('GET /api/google/auth-url/:propertyId returns auth URL when configured', async () => {
     isGoogleConfigured.mockReturnValue(true);
     getAuthUrl.mockReturnValue('https://accounts.google.com/auth?state=test');
@@ -840,6 +903,96 @@ describe('server API', () => {
     expect(sql).toMatch(/e\.end_date\s+IS\s+NOT\s+NULL\s+AND\s+e\.end_date\s*>\s*date\('now'\)/i);
   });
 
+  test('getNextCollection_sqlSelectsIsGardenWasteAndOptedInFlags', async () => {
+    mockPrepare.all.mockReturnValueOnce([]);
+
+    await request(app).get('/api/next-collection');
+
+    const sql = getDb().prepare.mock.calls.map(c => c[0]).find(s => s.includes('days_until'));
+    expect(sql).toMatch(/is_garden_waste/);
+    expect(sql).toMatch(/garden_waste_opted_in/);
+  });
+
+  // #33: Garden Waste is a paid, opt-in add-on - excluded from display for
+  // any property that hasn't opted in.
+  test('getNextCollection_gardenWasteOptedOut_excludesGardenWasteRow', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(0);
+  });
+
+  test('getNextCollection_gardenWasteOptedIn_includesGardenWasteRow', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 1,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].colour).toBe('#92400e');
+  });
+
+  // The excluded garden-waste row sits on the SAME nearest date as a
+  // non-garden row (the real "X and Y" combined-day case, already split
+  // into separate rows by the fan-out join) - excluding it must not
+  // suppress the still-valid non-garden collection for that date.
+  test('getNextCollection_gardenWasteOptedOutOnCombinedDay_stillShowsTheNonGardenWasteRowForThatDate', async () => {
+    const summary = 'Garden waste and general waste+food (+food only after transition week)';
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-11-26', endDate: null, days_until: 5, summary,
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'waste+food', is_garden_waste: 0, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0].colour).toBe('#6b7280');
+    expect(res.body.collections[0].label).toBe('general waste+food (+food only after transition week)');
+  });
+
+  // The nearest date's ONLY row is an excluded garden-waste one, but a
+  // later date has a real (non-garden) collection - the property must
+  // advance to that later date, not report no collection at all.
+  test('getNextCollection_gardenWasteOptedOutIsOnlyRowOnNearestDate_advancesToLaterNonGardenDate', async () => {
+    mockPrepare.all.mockReturnValueOnce([
+      {
+        date: '2026-11-05', endDate: null, days_until: 5, summary: 'Garden waste',
+        label: 'Garden Waste', colour: '#92400e', binTypeMatch: 'Garden', is_garden_waste: 1, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+      {
+        date: '2026-11-07', endDate: null, days_until: 7, summary: 'Grey Bin',
+        label: 'General Waste', colour: '#6b7280', binTypeMatch: 'Grey', is_garden_waste: 0, garden_waste_opted_in: 0,
+        property_id: 1, property_label: 'Home',
+      },
+    ]);
+
+    const res = await request(app).get('/api/next-collection');
+
+    expect(res.body.collections).toHaveLength(1);
+    expect(res.body.collections[0]).toMatchObject({ date: '2026-11-07', colour: '#6b7280' });
+  });
+
   // --- GET /api/bin-types ---
 
   test('getBinTypes_returns200WithArray', async () => {
@@ -905,6 +1058,82 @@ describe('server API', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.summary_match).toBe('Grey');
+  });
+
+  // PR #34 review finding C1: summary_match was validated for non-emptiness
+  // BEFORE wildcard characters were stripped, so a Match of pure wildcards
+  // (e.g. "%") passed validation and was persisted as an empty string. An
+  // empty summary_match is catastrophic once consumed by sync.js's Garden
+  // Waste classification (a blank matcher matches every event via
+  // String.includes('')), so this must be rejected at the API boundary,
+  // not just handled defensively downstream.
+  test('postBinType_withSummaryMatchThatIsOnlyWildcards_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '%', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/non-wildcard/i);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  test('postBinType_withSummaryMatchAllUnderscores_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '___', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('putBinType_withSummaryMatchThatIsOnlyWildcards_returns400', async () => {
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: '%%', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/non-wildcard/i);
+  });
+
+  test('postBinType_withWhitespaceOnlySummaryMatch_returns400', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: '   ', label: 'Oops', colour: '#111111' });
+
+    expect(res.status).toBe(400);
+  });
+
+  // --- #33 Task 1: is_garden_waste plumbing ---
+
+  test('postBinType_withIsGardenWasteTrue_persists1', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: true });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Garden'));
+    expect(insertCall).toContain(1);
+  });
+
+  test('postBinType_withoutIsGardenWaste_defaultsTo0', async () => {
+    const res = await request(app)
+      .post('/api/bin-types')
+      .send({ summary_match: 'Grey', label: 'General Waste', colour: '#6b7280' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockPrepare.run.mock.calls.find(args => args.includes('Grey'));
+    expect(insertCall).toContain(0);
+  });
+
+  test('putBinType_withIsGardenWasteTrue_persists1', async () => {
+    mockPrepare.run.mockReturnValueOnce({ changes: 1 });
+
+    const res = await request(app)
+      .put('/api/bin-types/1')
+      .send({ summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: true });
+
+    expect(res.status).toBe(200);
+    const updateCall = mockPrepare.run.mock.calls.find(args => args.includes('Garden'));
+    expect(updateCall).toContain(1);
   });
 
   test('postBinType_withDuplicateSummaryMatch_returns409WithJsonError', async () => {

@@ -503,6 +503,7 @@ h2 {
 .badge-skipped { background: var(--muted-bg);    color: var(--muted); }
 .badge-failed  { background: var(--danger-bg);   color: var(--danger); }
 .badge-partial { background: var(--partial-bg);  color: var(--partial); }
+.badge-paid    { background: var(--warning-bg);  color: var(--warning); margin-left: 6px; }
 
 @keyframes badgePulse {
   0%, 100% { opacity: 1; }
@@ -654,6 +655,25 @@ input[type="color"] {
   cursor: pointer;
 }
 
+input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  cursor: pointer;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.checkbox-label input[type="checkbox"] { flex: none; }
+
 .form-error {
   color: var(--danger);
   font-size: 12px;
@@ -729,6 +749,19 @@ input[type="color"] {
   color: var(--text);
   margin-bottom: var(--space-lg);
   letter-spacing: -0.3px;
+}
+
+.modal-body {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.5;
+  margin-bottom: var(--space-lg);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
 }
 
 /* ── Accordion ──────────────────────────────────────────────── */

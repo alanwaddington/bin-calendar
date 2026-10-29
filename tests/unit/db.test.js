@@ -168,4 +168,52 @@ describe('db', () => {
     expect(row).toBeDefined();
     expect(row.updated_at).toBeTruthy();
   });
+
+  test('initDb_migration006_addsGardenWasteOptedInToProperties', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    const result = db.prepare(
+      "INSERT INTO properties (label, uprn, calendar_type) VALUES ('Home', '12345', 'google')"
+    ).run();
+    const row = db.prepare('SELECT garden_waste_opted_in FROM properties WHERE id = ?').get(result.lastInsertRowid);
+    expect(row.garden_waste_opted_in).toBe(0);
+  });
+
+  test('initDb_migration006_addsIsGardenWasteToBinTypes', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    // 'Grey' is one of the default-seeded bin_types rows (003.sql) - must
+    // come out not flagged as garden waste by default.
+    const row = db.prepare("SELECT is_garden_waste FROM bin_types WHERE summary_match = 'Grey'").get();
+    expect(row.is_garden_waste).toBe(0);
+  });
+
+  test('initDb_migration007_addsEventsDeletedToSyncResults', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    db.prepare("INSERT INTO sync_runs (status) VALUES ('running')").run();
+    const result = db.prepare(
+      "INSERT INTO sync_results (run_id, events_added, events_skipped) VALUES (1, 0, 0)"
+    ).run();
+    const row = db.prepare('SELECT events_deleted FROM sync_results WHERE id = ?').get(result.lastInsertRowid);
+    expect(row.events_deleted).toBe(0);
+  });
+
+  // PR #34 review finding m1 (new, full /pr-reviewer re-audit): a genuine
+  // combined-day summary rewrite is a correction, not an addition - needs
+  // its own counter rather than being lumped into events_added.
+  test('initDb_migration008_addsEventsUpdatedToSyncResults', () => {
+    const { initDb } = require('../../src/db');
+    const db = initDb();
+
+    db.prepare("INSERT INTO sync_runs (status) VALUES ('running')").run();
+    const result = db.prepare(
+      "INSERT INTO sync_results (run_id, events_added, events_skipped) VALUES (1, 0, 0)"
+    ).run();
+    const row = db.prepare('SELECT events_updated FROM sync_results WHERE id = ?').get(result.lastInsertRowid);
+    expect(row.events_updated).toBe(0);
+  });
 });

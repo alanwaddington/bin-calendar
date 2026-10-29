@@ -9,6 +9,7 @@ const { isGoogleConfigured, getAuthUrl, exchangeCode, listCalendars } = require(
 const { fetchCalendars } = require('./icloud');
 const { encryptJson } = require('./crypto');
 const { checkSingleCredential } = require('./credential-check');
+const { matchesOutsideParentheses, splitSummarySegments } = require('./bin-types');
 
 const app = express();
 app.use(express.json());
@@ -35,7 +36,7 @@ app.get('/api/config', (req, res) => {
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
   const rows = getDb().prepare(
-    'SELECT id, label, ics_url, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
+    'SELECT id, label, ics_url, calendar_type, calendar_id, garden_waste_opted_in, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
   ).all();
   res.json(rows);
 });
@@ -44,21 +45,39 @@ function isValidIcsUrl(url) {
   return typeof url === 'string' && (url.startsWith('https://') || url.startsWith('webcal://'));
 }
 
+// Coerces a client-supplied opt-in value to a clean SQLite-storable 0/1.
+// Only an explicit true/1/'1'/'true' counts as opted-in - everything else
+// (including the classic 'false' string footgun, which plain JS truthiness
+// would get wrong) coerces to 0, never throws, so a malformed body can
+// never 500 here.
+function toBoolInt(value) {
+  return value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
+}
+
 app.post('/api/properties', (req, res) => {
-  const { label, ics_url, calendar_type } = req.body;
+  const { label, ics_url, calendar_type, garden_waste_opted_in } = req.body;
   if (!label || !ics_url || !calendar_type) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
   const result = getDb().prepare(
-    'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id) VALUES (?, ?, ?, ?, ?)'
-  ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null);
+    'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id, garden_waste_opted_in) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null, toBoolInt(garden_waste_opted_in));
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/properties/:id', (req, res) => {
-  const { label, ics_url } = req.body;
+  const { label, ics_url, garden_waste_opted_in } = req.body;
   if (!label || !ics_url) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
-  getDb().prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+  // garden_waste_opted_in is only touched when the caller actually sends it
+  // - omitting it must preserve whatever the property is already set to,
+  // not reset it to a default (unlike POST, where there's no prior value
+  // to preserve).
+  if (garden_waste_opted_in === undefined) {
+    getDb().prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+  } else {
+    getDb().prepare('UPDATE properties SET label = ?, ics_url = ?, garden_waste_opted_in = ? WHERE id = ?')
+      .run(label, ics_url, toBoolInt(garden_waste_opted_in), req.params.id);
+  }
   res.json({ ok: true });
 });
 
@@ -102,20 +121,6 @@ function formatMatchedLabel(label, summary) {
   return `${label} (${summary})`;
 }
 
-// East Ayrshire sometimes combines several collections into one VEVENT by
-// literally concatenating each one's own standalone summary with " and "
-// (verified against the real feed: "Garden waste and general waste+food
-// (+food only after transition week)" is exactly "Garden waste" + " and " +
-// "general waste+food (+food only after transition week)" - both halves
-// appear verbatim elsewhere in the same feed as standalone single-day
-// entries). Splitting on that joiner lets each matched bin type be labelled
-// from just its own segment, so a qualifier that only applies to one
-// collection (e.g. "+food only after transition week") doesn't leak onto
-// every bin type collected that day.
-function splitSummarySegments(summary) {
-  return summary.split(/\s+and\s+/i).map(s => s.trim()).filter(Boolean);
-}
-
 // Finds which segment of a (possibly "X and Y"-combined) summary a specific
 // bin_types match actually belongs to, so formatMatchedLabel only sees the
 // text relevant to THAT match. Falls back to the whole summary when there's
@@ -141,17 +146,6 @@ function attributeSummarySegment(summary, matchText) {
 // so they agree on how many rows one event produces.
 const BIN_TYPE_JOIN_SQL = `LEFT JOIN bin_types bt ON e.summary LIKE '%' || bt.summary_match || '%'`;
 
-// Parenthetical text in this feed is always an explanatory caveat attached
-// to a DIFFERENT collection (e.g. "(+food only after transition week)" on
-// a General Waste day) - never an announcement of its own, separate
-// collection. A genuinely combined day is always joined with "and" instead
-// (see attributeSummarySegment above). So a word that only appears inside
-// parentheses must never, on its own, trigger a bin_types match - verified
-// against every real summary fetched this session.
-function stripParentheticals(text) {
-  return text.replace(/\([^()]*\)/g, '');
-}
-
 // The fan-out join above matches against the whole summary, parentheses
 // included - so a bin_types rule whose Match text happens to appear only
 // inside someone else's caveat (real-world case: a "Transition Week" rule
@@ -174,15 +168,25 @@ function excludeParenthesesOnlyMatches(rows) {
   const result = [];
   for (const group of byUid.values()) {
     const kept = group.filter(r =>
-      !r.binTypeMatch || stripParentheticals(r.summary).toLowerCase().includes(r.binTypeMatch.toLowerCase())
+      !r.binTypeMatch || matchesOutsideParentheses(r.summary, r.binTypeMatch)
     );
     if (kept.length > 0) {
       result.push(...kept);
     } else {
-      result.push({ ...group[0], label: null, colour: null, binTypeMatch: null });
+      result.push({ ...group[0], label: null, colour: null, binTypeMatch: null, is_garden_waste: 0 });
     }
   }
   return result;
+}
+
+// #33: Garden Waste is a paid, opt-in add-on. The fan-out join already
+// produces one row per matched bin_types rule, so dropping just the
+// garden-waste row for an opted-out property naturally leaves any other
+// match for the same event (e.g. the General Waste half of a combined
+// "Garden waste and general waste+food (...)" day) intact - no separate
+// combined-day handling needed here.
+function excludeOptedOutGardenWaste(rows) {
+  return rows.filter(r => !(r.is_garden_waste === 1 && r.garden_waste_opted_in === 0));
 }
 
 // Two different bin_types rules can legitimately share a label and colour
@@ -245,14 +249,15 @@ function expandDateRange(startDate, endDate) {
 
 function getPropertyEventsRows(db, propertyId) {
   const rows = db.prepare(`
-    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour, bt.summary_match AS binTypeMatch
+    SELECT e.uid, e.start_date AS date, e.end_date AS endDate, e.summary, bt.label, bt.colour, bt.summary_match AS binTypeMatch, bt.is_garden_waste, p.garden_waste_opted_in
     FROM events e
+    JOIN properties p ON p.id = e.property_id
     ${BIN_TYPE_JOIN_SQL}
     WHERE e.property_id = ?
     ORDER BY e.start_date ASC, e.uid ASC, bt.id ASC
   `).all(propertyId);
 
-  const filteredRows = excludeParenthesesOnlyMatches(rows);
+  const filteredRows = excludeOptedOutGardenWaste(excludeParenthesesOnlyMatches(rows));
 
   // Stable-sorted by date (and uid as a tiebreak for same-date different
   // events) - ties between multiple matched rows for the SAME event keep
@@ -420,6 +425,8 @@ app.get('/api/next-collection', (req, res) => {
       bt.label            AS label,
       bt.colour           AS colour,
       bt.summary_match    AS binTypeMatch,
+      bt.is_garden_waste  AS is_garden_waste,
+      p.garden_waste_opted_in AS garden_waste_opted_in,
       e.property_id,
       p.label             AS property_label
     FROM events e
@@ -430,7 +437,7 @@ app.get('/api/next-collection', (req, res) => {
     ORDER BY e.start_date ASC, bt.id ASC
   `).all();
 
-  const filteredRows = excludeParenthesesOnlyMatches(rows);
+  const filteredRows = excludeOptedOutGardenWaste(excludeParenthesesOnlyMatches(rows));
 
   // Expand each row's [start_date, end_date) span into one entry per
   // covered day, offsetting the SQL-computed days_until by the day's
@@ -473,10 +480,17 @@ app.get('/api/bin-types', (req, res) => {
 const HEX_COLOUR_RE = /^#[0-9a-fA-F]{6}$/;
 
 function sanitiseBinTypeInput(body) {
-  const { summary_match, label, colour } = body;
+  const { summary_match, label, colour, is_garden_waste } = body;
   if (!summary_match || !label || !colour) return { error: 'Missing fields: summary_match, label, colour required' };
   if (!HEX_COLOUR_RE.test(colour)) return { error: 'Invalid colour: must be a 6-digit hex value (e.g. #6b7280)' };
-  return { summary_match: summary_match.replace(/[%_]/g, ''), label, colour };
+  // PR #34 review finding C1: validation previously ran BEFORE wildcard
+  // stripping, so a Match of pure wildcards (e.g. "%") passed the !summary_match
+  // check and was persisted as an empty string - catastrophic once consumed
+  // by sync.js's Garden Waste classification (an empty matcher matches
+  // every event). Strip first, then reject if nothing meaningful remains.
+  const strippedMatch = summary_match.replace(/[%_]/g, '').trim();
+  if (!strippedMatch) return { error: 'Invalid match text: must contain at least one non-wildcard character' };
+  return { summary_match: strippedMatch, label, colour, is_garden_waste: toBoolInt(is_garden_waste) };
 }
 
 app.post('/api/bin-types', (req, res) => {
@@ -484,9 +498,9 @@ app.post('/api/bin-types', (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   try {
     const result = getDb().prepare(
-      'INSERT INTO bin_types (summary_match, label, colour) VALUES (?, ?, ?)'
-    ).run(input.summary_match, input.label, input.colour);
-    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour });
+      'INSERT INTO bin_types (summary_match, label, colour, is_garden_waste) VALUES (?, ?, ?, ?)'
+    ).run(input.summary_match, input.label, input.colour, input.is_garden_waste);
+    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour, is_garden_waste: input.is_garden_waste });
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'A bin type with that match text already exists' });
@@ -500,8 +514,8 @@ app.put('/api/bin-types/:id', (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   try {
     const result = getDb().prepare(
-      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ? WHERE id = ?'
-    ).run(input.summary_match, input.label, input.colour, req.params.id);
+      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ?, is_garden_waste = ? WHERE id = ?'
+    ).run(input.summary_match, input.label, input.colour, input.is_garden_waste, req.params.id);
     if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
     res.json({ ok: true });
   } catch (err) {
