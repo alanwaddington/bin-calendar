@@ -373,6 +373,77 @@ describe('sync', () => {
     expect(pruneCall).toBeDefined();
   });
 
+  // PR #37 review finding M2: a property-scoped run previously pruned
+  // past events for EVERY property (unscoped DELETE), not just the one
+  // requested - a scoped sync must never touch another property's cached
+  // events.
+  test('runSync_withPropertyId_scopesThePastEventsPruneToThatPropertyOnly', async () => {
+    mockPrepareReturn.all.mockReturnValueOnce([]); // no matching property -> skipped path
+
+    await runSync(42);
+
+    const pruneCall = mockDb.prepare.mock.calls.find(c => c[0].includes('DELETE FROM events') && c[0].includes('start_date'));
+    expect(pruneCall[0]).toMatch(/AND property_id = \?/);
+    expect(mockPrepareReturn.run.mock.calls.find(args => args[0] === 42)).toBeDefined();
+  });
+
+  test('runSync_withNoPropertyId_prunesPastEventsUnscoped', async () => {
+    await runSync();
+
+    const pruneCall = mockDb.prepare.mock.calls.find(c => c[0].includes('DELETE FROM events') && c[0].includes('start_date'));
+    expect(pruneCall[0]).not.toMatch(/AND property_id = \?/);
+  });
+
+  // PR #37 review finding M2: purgeOldRecords (DELETE FROM sync_runs
+  // older than 90 days) is global run-history maintenance - it must not
+  // run on every scoped sync, which can fire far more often (once per
+  // opt-in toggle) than the monthly/manual global sync it was designed
+  // for cadence-wise.
+  test('runSync_withPropertyId_doesNotPurgeOldSyncRunHistory', async () => {
+    const property = {
+      id: 42, label: 'Home', ics_url: 'https://a.example/cal.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'enc',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({ events: [], warnings: [] });
+
+    await runSync(42);
+
+    const purgeCall = mockDb.prepare.mock.calls.find(c => c[0].includes('sync_runs') && c[0].includes('-90 days'));
+    expect(purgeCall).toBeUndefined();
+  });
+
+  test('runSync_withNoPropertyId_stillPurgesOldSyncRunHistory', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://a.example/cal.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'enc',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({ events: [], warnings: [] });
+
+    await runSync();
+
+    const purgeCall = mockDb.prepare.mock.calls.find(c => c[0].includes('sync_runs') && c[0].includes('-90 days'));
+    expect(purgeCall).toBeDefined();
+  });
+
+  // PR #37 review finding M2: the prune ran OUTSIDE the try/catch that
+  // calls updateRun('failed', ...), so a failure there left the
+  // sync_runs row stuck at 'running' forever - every later sync would
+  // 429 until the process restarted. Moving it inside the try means a
+  // prune failure is caught, recorded, and the run is correctly marked
+  // failed rather than orphaned.
+  test('runSync_whenThePastEventsPruneThrows_marksTheRunFailedInsteadOfLeavingItOrphaned', async () => {
+    mockPrepareReturn.run
+      .mockReturnValueOnce({ lastInsertRowid: 1 }) // lock acquisition: INSERT INTO sync_runs
+      .mockImplementationOnce(() => { throw new Error('disk full'); }); // the prune DELETE
+
+    await expect(runSync()).rejects.toThrow('disk full');
+
+    const failedRun = mockPrepareReturn.run.mock.calls.find(args => args[0] === 'failed');
+    expect(failedRun).toBeDefined();
+  });
+
   test('runSync_onSuccessfulPropertySync_cachesEvents', async () => {
     const property = {
       id: 1, label: 'Home', uprn: '12345',
@@ -1578,6 +1649,37 @@ describe('sync', () => {
       warnings: [],
     });
     google.listEvents.mockResolvedValue([{ iCalUID: 'evt-grey', id: 'google-id-grey' }]);
+
+    await runSync();
+
+    expect(google.deleteEvent).not.toHaveBeenCalled();
+  });
+
+  // PR #37 review finding M1: stripMatchingSegments('   ', []) returns ''
+  // (splitting on " and " and filtering empties leaves nothing), so
+  // isFullyWithheld was true for a whitespace-only summary EVEN WITH ZERO
+  // flagged bin types - deleting an already-pushed event from the real
+  // calendar for a reason that has nothing to do with opt-in gating.
+  // touchesAnyFlaggedType must also be true before a summary counts as
+  // fully withheld.
+  test('runSync_whitespaceOnlySummaryWithNoFlaggedBinTypes_isNeverTreatedAsFullyWithheld', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://a.example/cal.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'enc',
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]) // no flagged bin types at all
+      .mockReturnValueOnce([]); // no opt-in rows
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-blank', summary: '   ',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-blank', id: 'google-id-blank' }]); // already pushed
 
     await runSync();
 

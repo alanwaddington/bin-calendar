@@ -33,10 +33,22 @@ async function runSync(propertyId = null) {
     db.prepare("UPDATE sync_runs SET status = ?, error = ?, completed_at = datetime('now') WHERE id = ?")
       .run(status, error, runId);
 
-  // Prune all past events at the start of each run
-  db.prepare("DELETE FROM events WHERE start_date < date('now')").run();
-
   try {
+    // PR #37 review finding M2: scoped to just the requested property
+    // when propertyId is given - this previously pruned EVERY property's
+    // past events on a scoped run, which violates the scoping contract a
+    // property-scoped sync is supposed to have (it can now fire far more
+    // often than the global sync, once per opt-in toggle). Also moved
+    // inside this try (was previously outside both try blocks) so a
+    // failure here is caught and recorded via updateRun('failed') instead
+    // of leaving the sync_runs row stuck at 'running' - which would 429
+    // every subsequent sync until the process restarted.
+    if (propertyId) {
+      db.prepare("DELETE FROM events WHERE start_date < date('now') AND property_id = ?").run(propertyId);
+    } else {
+      db.prepare("DELETE FROM events WHERE start_date < date('now')").run();
+    }
+
     // #35: scoped to a single property when propertyId is given. An
     // unknown id, or one without credentials/calendar_id, returns zero
     // rows and falls into the same "skipped" branch below as the global
@@ -73,7 +85,10 @@ async function runSync(propertyId = null) {
       : succeeded.length === 0 ? 'failed' : 'partial';
 
     updateRun(overallStatus);
-    purgeOldRecords(db);
+    // PR #37 review finding M2: 90-day sync_runs history pruning is global
+    // run-history maintenance, unrelated to any single property - a
+    // scoped run must not perform it.
+    if (!propertyId) purgeOldRecords(db);
 
     return { status: 200, runId, overallStatus, results };
   } catch (err) {
@@ -174,8 +189,14 @@ async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
     for (const event of events) {
       const targetSummary = stripMatchingSegments(event.summary, withheldMatchers);
       const touchesAnyFlaggedType = matchesAnySegment(event.summary, allFlaggedMatchers);
-      // Every segment withheld - nothing left to push at all.
-      const isFullyWithheld = targetSummary === '';
+      // Every segment withheld - nothing left to push at all. Requires
+      // touchesAnyFlaggedType too (PR #37 review finding M1):
+      // stripMatchingSegments('   ', []) returns '' for a degenerate
+      // (e.g. whitespace-only) summary even with zero withheld matchers,
+      // which would otherwise be misread as "fully withheld" and delete
+      // an already-pushed event for a reason that has nothing to do with
+      // opt-in gating.
+      const isFullyWithheld = touchesAnyFlaggedType && targetSummary === '';
 
       if (isFullyWithheld) {
         if (existingByUid.has(event.uid)) {
