@@ -248,7 +248,7 @@ function excludeOptedOutBinTypes(rows) {
 function dedupeIdenticalRows(rows, keyFields) {
   const seen = new Set();
   return rows.filter(r => {
-    const key = keyFields.map(f => r[f]).join(' ');
+    const key = keyFields.map(f => r[f]).join(' ');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
