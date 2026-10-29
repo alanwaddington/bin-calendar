@@ -10,8 +10,8 @@ A self-hosted Docker application that fetches bin collection schedules from East
 - Configurable sync schedule via a custom cron expression (default: 1st of each month)
 - Manual sync via the web UI
 - Per-property calendar view — month grid (desktop) / agenda list (mobile) of synced collection dates, with month navigation and a property switcher
-- Configurable bin-type label/colour mapping (Settings → Bin Types), with an opt-in flag for paid/opt-in collection types
-- Per-property opt-in for Garden Waste collection — hidden from the Dashboard/Calendar and never pushed to the external calendar until a property explicitly opts in; opting out removes any already-synced Garden Waste events on the next sync
+- Configurable bin-type label/colour mapping (Settings → Bin Types), with a per-bin-type opt-in flag for paid/opt-in collection types (e.g. Garden Waste)
+- Per-property, per-bin-type opt-in — each flagged bin type is hidden from the Dashboard/Calendar and never pushed to the external calendar until a property explicitly opts in; saving a changed opt-in immediately triggers a sync scoped to that property, removing or adding the affected events right away instead of waiting for the next scheduled sync
 - Sync history and per-property logs, including added/updated/deleted event counts
 - Credentials encrypted at rest (AES-256-GCM)
 
@@ -258,7 +258,7 @@ Pull requests also run the test job (no Docker build).
 | GET | `/api/config` | Feature flags (Google configured, address lookup configured) |
 | GET | `/api/properties` | List all properties |
 | POST | `/api/properties` | Create a property |
-| PUT | `/api/properties/:id` | Update label, ICS calendar URL, and Garden Waste opt-in |
+| PUT | `/api/properties/:id` | Update label, ICS calendar URL, and per-bin-type opt-in |
 | DELETE | `/api/properties/:id` | Delete a property |
 | GET | `/api/properties/:id/events` | Cached collection events for a property (calendar view) |
 | GET | `/api/google/auth-url/:propertyId` | Start Google OAuth flow |
@@ -267,7 +267,8 @@ Pull requests also run the test job (no Docker build).
 | PUT | `/api/properties/:id/calendar` | Set the target calendar |
 | POST | `/api/icloud/calendars` | Fetch iCloud calendar list |
 | POST | `/api/properties/:id/icloud` | Save iCloud credentials |
-| POST | `/api/sync` | Trigger a manual sync |
+| POST | `/api/sync` | Trigger a manual sync (all properties) |
+| POST | `/api/properties/:id/sync` | Trigger a sync scoped to one property |
 | GET | `/api/sync/runs` | Sync history |
 | GET | `/api/next-collection` | Next upcoming bin collection across all properties |
 | GET | `/api/bin-types` | List bin type label/colour mappings |

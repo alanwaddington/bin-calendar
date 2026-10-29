@@ -674,6 +674,13 @@ input[type="checkbox"] {
 
 .checkbox-label input[type="checkbox"] { flex: none; }
 
+.opt-in-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .form-error {
   color: var(--danger);
   font-size: 12px;
@@ -1022,6 +1029,12 @@ input[type="checkbox"] {
   background: var(--success-dark);
   color: var(--success);
   border: 1px solid rgba(22,163,74,0.25);
+}
+
+.toast-info {
+  background: var(--muted-bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
 }
 
 .toast-error {

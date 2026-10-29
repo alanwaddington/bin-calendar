@@ -5,217 +5,361 @@ afterEach(() => {
 });
 
 const CONFIG_ROUTE = { method: 'GET', url: '/api/config', body: {} };
+const SCHEDULE_ROUTE = { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } };
 
-describe('properties.js - Garden Waste opt-in (#33 Task 7)', () => {
-  test('buildAddPropertyAccordion_rendersUncheckedGardenWasteControlLabelledAsPaidAddOn', async () => {
+// Waits for any fire-and-forget async chains (e.g. triggerScopedSync, kicked
+// off without being awaited so Save can return immediately) to finish all
+// their pending microtasks before assertions run.
+function flush() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+describe('properties.js - per-bin-type opt-in switches (#35 Task 7)', () => {
+  test('buildAddPropertyAccordion_withNoFlaggedBinTypes_rendersNoOptInSwitches', async () => {
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    const checkbox = window.document.getElementById('add-garden-waste');
+    const accordion = window.document.getElementById('acc-add-prop');
+    expect(accordion.querySelector('.opt-in-switches')).toBeNull();
+    expect(accordion.textContent).not.toMatch(/Opt-in collections/);
+  });
+
+  test('buildAddPropertyAccordion_withOneFlaggedBinType_rendersOneUncheckedSwitchLabelledWithItsOwnColourAndLabel', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+    ]));
+
+    await window.loadSettings();
+
+    const checkbox = window.document.getElementById('add-opt-in-1');
     expect(checkbox).not.toBeNull();
     expect(checkbox.checked).toBe(false);
     const accordion = window.document.getElementById('acc-add-prop');
-    expect(accordion.innerHTML).toMatch(/PAID ADD-ON/);
+    expect(accordion.textContent).toContain('Garden Waste');
+    expect(accordion.innerHTML).toMatch(/background:#92400e/);
+    expect(accordion.innerHTML).not.toMatch(/PAID ADD-ON/);
   });
 
-  test('buildPropertyAccordion_optedInProperty_rendersCheckedGardenWasteControl', async () => {
+  test('buildAddPropertyAccordion_withTwoFlaggedBinTypes_rendersTwoSwitches', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+        { id: 2, summary_match: 'Bulky', label: 'Bulky Waste', colour: '#334455', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.getElementById('add-opt-in-1')).not.toBeNull();
+    expect(window.document.getElementById('add-opt-in-2')).not.toBeNull();
+  });
+
+  test('buildPropertyAccordion_withNoFlaggedBinTypes_rendersNoOptInSwitches', async () => {
     const property = {
-      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google',
-      calendar_id: 'primary', connected: true, credential_status: 'ok', garden_waste_opted_in: 1,
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [],
     };
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [property] },
       { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
-      { method: 'GET', url: '/api/google/calendars/1', body: [] },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    const checkbox = window.document.getElementById('prop-garden-waste-1');
-    expect(checkbox).not.toBeNull();
-    expect(checkbox.checked).toBe(true);
+    const accordion = window.document.getElementById('acc-prop-1');
+    expect(accordion.querySelector('.opt-in-switches')).toBeNull();
   });
 
-  test('savePropertyEdit_withNoOptOutTransition_persistsGardenWasteOptedInImmediatelyWithoutAWarning', async () => {
+  test('buildPropertyAccordion_withTwoFlaggedBinTypes_eachSwitchReflectsOptedInBinTypeIdsIndependently', async () => {
     const property = {
       id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
-      calendar_id: 'x', connected: false, credential_status: 'unknown', garden_waste_opted_in: 0,
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1],
+    };
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+        { id: 2, summary_match: 'Bulky', label: 'Bulky Waste', colour: '#334455', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+    ]));
+
+    await window.loadSettings();
+
+    expect(window.document.getElementById('prop-opt-in-1-1').checked).toBe(true);
+    expect(window.document.getElementById('prop-opt-in-1-2').checked).toBe(false);
+  });
+
+  // The known sequencing hazard from the Design: renderPropertyAccordions()
+  // needs _binTypes already populated (to know which types are flagged), so
+  // bin types must be fetched before properties, not raced via Promise.all.
+  test('loadSettings_fetchesBinTypesBeforeFetchingProperties', async () => {
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [] },
+      SCHEDULE_ROUTE,
+    ], calls));
+
+    await window.loadSettings();
+
+    const binTypesIndex = calls.findIndex(c => c.method === 'GET' && c.url === '/api/bin-types');
+    const propertiesIndex = calls.findIndex(c => c.method === 'GET' && c.url === '/api/properties');
+    expect(binTypesIndex).toBeGreaterThanOrEqual(0);
+    expect(propertiesIndex).toBeGreaterThanOrEqual(0);
+    expect(binTypesIndex).toBeLessThan(propertiesIndex);
+  });
+});
+
+describe('properties.js - saving opt-in switches (#35 Task 7)', () => {
+  function flaggedBinTypesRoute() {
+    return { method: 'GET', url: '/api/bin-types', body: [
+      { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+      { id: 2, summary_match: 'Bulky', label: 'Bulky Waste', colour: '#334455', requires_opt_in: 1 },
+    ] };
+  }
+
+  test('savePropertyEdit_turningASwitchOnWithNoTurnOffs_savesImmediatelyWithoutAWarning', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [],
     };
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [property] },
-      { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, message: 'Skipped — no properties configured' } },
     ], calls));
 
     await window.loadSettings();
-    window.document.getElementById('prop-garden-waste-1').checked = true; // turning ON needs no warning
+    window.document.getElementById('prop-opt-in-1-1').checked = true;
     await window.savePropertyEdit(1);
 
     expect(window.document.querySelector('.modal-overlay')).toBeNull();
     const putCall = calls.find(c => c.method === 'PUT' && c.url === '/api/properties/1');
     expect(putCall).toBeDefined();
-    expect(putCall.body.garden_waste_opted_in).toBe(true);
+    expect(putCall.body.opted_in_bin_type_ids).toEqual([1]);
   });
 
-  test('savePropertyEdit_turningGardenWasteOff_showsWarningModalAndDoesNotSaveYet', async () => {
+  test('savePropertyEdit_withNoSwitchChanges_savesButTriggersNoScopedSync', async () => {
     const property = {
       id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
-      calendar_id: 'x', connected: false, credential_status: 'unknown', garden_waste_opted_in: 1,
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1],
     };
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [property] },
-      { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+      // Deliberately no POST /api/properties/1/sync route - if one were
+      // fired, mockRouterFetch would reject, proving a real assertion
+      // failure rather than a silent pass.
+    ], calls));
+
+    await window.loadSettings();
+    await window.savePropertyEdit(1); // no switches touched
+    await flush();
+
+    expect(calls.find(c => c.method === 'PUT')).toBeDefined();
+    expect(calls.find(c => c.url === '/api/properties/1/sync')).toBeUndefined();
+  });
+
+  test('savePropertyEdit_turningOffOneOfTwoSwitches_showsWarningNamingOnlyThatOneAndDoesNotSaveYet', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1, 2],
+    };
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
     ], calls));
 
     await window.loadSettings();
-    window.document.getElementById('prop-garden-waste-1').checked = false;
+    window.document.getElementById('prop-opt-in-1-1').checked = false; // Garden Waste off, Bulky stays on
     await window.savePropertyEdit(1);
 
     const modal = window.document.querySelector('.modal-overlay');
     expect(modal).not.toBeNull();
+    expect(modal.textContent).toMatch(/Garden Waste/);
+    expect(modal.textContent).not.toMatch(/Bulky Waste/);
     expect(modal.textContent).toMatch(/removed/i);
     expect(calls.find(c => c.method === 'PUT')).toBeUndefined();
   });
 
-  test('gardenWasteOffWarning_cancel_reChecksTheBoxAndNeverSaves', async () => {
+  test('savePropertyEdit_turningOffBothSwitches_showsWarningNamingBothBinTypes', async () => {
     const property = {
       id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
-      calendar_id: 'x', connected: false, credential_status: 'unknown', garden_waste_opted_in: 1,
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1, 2],
+    };
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+    ]));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-opt-in-1-1').checked = false;
+    window.document.getElementById('prop-opt-in-1-2').checked = false;
+    await window.savePropertyEdit(1);
+
+    const modal = window.document.querySelector('.modal-overlay');
+    expect(modal).not.toBeNull();
+    expect(modal.textContent).toMatch(/Garden Waste/);
+    expect(modal.textContent).toMatch(/Bulky Waste/);
+    expect(modal.textContent).toMatch(/2/);
+  });
+
+  test('optInOffWarning_cancel_reChecksOnlyTheSwitchesThatWereTurnedOffAndNeverSaves', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1, 2],
     };
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [property] },
-      { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
     ], calls));
 
     await window.loadSettings();
-    window.document.getElementById('prop-garden-waste-1').checked = false;
+    window.document.getElementById('prop-opt-in-1-1').checked = false;
+    window.document.getElementById('prop-opt-in-1-2').checked = false;
     await window.savePropertyEdit(1);
-    window.document.getElementById('garden-waste-warning-cancel').click();
+    window.document.getElementById('opt-in-warning-cancel').click();
 
     expect(window.document.querySelector('.modal-overlay')).toBeNull();
-    expect(window.document.getElementById('prop-garden-waste-1').checked).toBe(true);
+    expect(window.document.getElementById('prop-opt-in-1-1').checked).toBe(true);
+    expect(window.document.getElementById('prop-opt-in-1-2').checked).toBe(true);
     expect(calls.find(c => c.method === 'PUT')).toBeUndefined();
   });
 
-  test('gardenWasteOffWarning_confirm_savesWithGardenWasteOptedInFalse', async () => {
+  test('optInOffWarning_confirm_savesWithOnlyTheRemainingBinTypesStillOptedIn', async () => {
     const property = {
       id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
-      calendar_id: 'x', connected: false, credential_status: 'unknown', garden_waste_opted_in: 1,
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1, 2],
     };
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [property] },
-      { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, runId: 1, overallStatus: 'success', results: [{ propertyId: 1 }] } },
     ], calls));
 
     await window.loadSettings();
-    window.document.getElementById('prop-garden-waste-1').checked = false;
+    window.document.getElementById('prop-opt-in-1-1').checked = false; // only Garden Waste turned off
     await window.savePropertyEdit(1);
-    await window.document.getElementById('garden-waste-warning-confirm').onclick();
+    await window.document.getElementById('opt-in-warning-confirm').onclick();
 
     expect(window.document.querySelector('.modal-overlay')).toBeNull();
     const putCall = calls.find(c => c.method === 'PUT' && c.url === '/api/properties/1');
     expect(putCall).toBeDefined();
-    expect(putCall.body.garden_waste_opted_in).toBe(false);
+    expect(putCall.body.opted_in_bin_type_ids).toEqual([2]);
   });
 
-  // PR #34 review finding m4: the modal had no ARIA role/labelling, no
-  // keyboard or backdrop dismissal, and no focus management - it could
-  // only be dismissed by mouse-clicking the Cancel button.
-  async function openGardenWasteOffWarning() {
+  // PR #34 review finding m4's a11y guarantees, carried forward onto the
+  // generalized modal.
+  async function openOptInOffWarning() {
     const property = {
       id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
-      calendar_id: 'x', connected: false, credential_status: 'unknown', garden_waste_opted_in: 1,
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1],
     };
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [property] },
-      { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
     ], calls));
 
     await window.loadSettings();
-    window.document.getElementById('prop-garden-waste-1').checked = false;
+    window.document.getElementById('prop-opt-in-1-1').checked = false;
     await window.savePropertyEdit(1);
     return { window, calls };
   }
 
-  test('gardenWasteOffWarning_hasDialogRoleAriaModalAndLabelledBySetToTheTitle', async () => {
-    const { window } = await openGardenWasteOffWarning();
+  test('optInOffWarning_hasDialogRoleAriaModalAndLabelledBySetToTheTitle', async () => {
+    const { window } = await openOptInOffWarning();
 
     const modal = window.document.querySelector('.modal');
     expect(modal.getAttribute('role')).toBe('dialog');
     expect(modal.getAttribute('aria-modal')).toBe('true');
     const labelId = modal.getAttribute('aria-labelledby');
     expect(labelId).toBeTruthy();
-    expect(window.document.getElementById(labelId).textContent).toMatch(/Turn off Garden Waste collection/);
+    expect(window.document.getElementById(labelId).textContent).toMatch(/Garden Waste/);
   });
 
-  test('gardenWasteOffWarning_onOpen_movesFocusToTheCancelButton', async () => {
-    const { window } = await openGardenWasteOffWarning();
+  test('optInOffWarning_onOpen_movesFocusToTheCancelButton', async () => {
+    const { window } = await openOptInOffWarning();
 
-    expect(window.document.activeElement.id).toBe('garden-waste-warning-cancel');
+    expect(window.document.activeElement.id).toBe('opt-in-warning-cancel');
   });
 
-  test('gardenWasteOffWarning_escapeKey_dismissesLikeCancel', async () => {
-    const { window, calls } = await openGardenWasteOffWarning();
+  test('optInOffWarning_escapeKey_dismissesLikeCancel', async () => {
+    const { window, calls } = await openOptInOffWarning();
 
     window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
 
     expect(window.document.querySelector('.modal-overlay')).toBeNull();
-    expect(window.document.getElementById('prop-garden-waste-1').checked).toBe(true);
+    expect(window.document.getElementById('prop-opt-in-1-1').checked).toBe(true);
     expect(calls.find(c => c.method === 'PUT')).toBeUndefined();
   });
 
-  test('gardenWasteOffWarning_clickingTheBackdrop_dismissesLikeCancel', async () => {
-    const { window, calls } = await openGardenWasteOffWarning();
+  test('optInOffWarning_clickingTheBackdrop_dismissesLikeCancel', async () => {
+    const { window, calls } = await openOptInOffWarning();
 
     window.document.querySelector('.modal-overlay').click();
 
     expect(window.document.querySelector('.modal-overlay')).toBeNull();
-    expect(window.document.getElementById('prop-garden-waste-1').checked).toBe(true);
+    expect(window.document.getElementById('prop-opt-in-1-1').checked).toBe(true);
     expect(calls.find(c => c.method === 'PUT')).toBeUndefined();
   });
 
-  test('gardenWasteOffWarning_clickingInsideTheModalItself_doesNotDismiss', async () => {
-    const { window } = await openGardenWasteOffWarning();
+  test('optInOffWarning_clickingInsideTheModalItself_doesNotDismiss', async () => {
+    const { window } = await openOptInOffWarning();
 
     window.document.querySelector('.modal').click();
 
     expect(window.document.querySelector('.modal-overlay')).not.toBeNull();
   });
 
-  // The Escape listener is attached to `document` for the lifetime of the
-  // modal - it must be removed on close, or it leaks and fires again (e.g.
-  // re-checking a DIFFERENT, unrelated property's box) the next time any
-  // code on the page presses Escape for an unrelated reason.
-  test('gardenWasteOffWarning_afterConfirmCloses_escapeKeyNoLongerDoesAnything', async () => {
-    const { window } = await openGardenWasteOffWarning();
-    await window.document.getElementById('garden-waste-warning-confirm').onclick();
+  test('optInOffWarning_afterConfirmCloses_escapeKeyNoLongerDoesAnything', async () => {
+    const { window } = await openOptInOffWarning();
+    await window.document.getElementById('opt-in-warning-confirm').onclick();
 
     expect(() => {
       window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
@@ -224,62 +368,187 @@ describe('properties.js - Garden Waste opt-in (#33 Task 7)', () => {
   });
 });
 
-describe('properties.js - Bin Types is_garden_waste flag (#33 Task 7)', () => {
-  test('buildBinTypeRow_withIsGardenWasteTrue_showsACheckmarkInTheGardenWasteColumn', async () => {
+describe('properties.js - scoped sync toast sequence (#35 Task 7)', () => {
+  function singleFlaggedBinTypeRoute() {
+    return { method: 'GET', url: '/api/bin-types', body: [
+      { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+    ] };
+  }
+
+  async function saveWithOptInToggledOn(syncRoute) {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [],
+    };
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      singleFlaggedBinTypeRoute(),
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+      syncRoute,
+    ], calls));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-opt-in-1-1').checked = true;
+    await window.savePropertyEdit(1);
+    return { window, calls };
+  }
+
+  test('savingAChangedSwitch_showsASyncingToastImmediately', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, runId: 1, overallStatus: 'success', results: [{ propertyId: 1 }] } }
+    );
+
+    const toasts = [...window.document.querySelectorAll('.toast')].map(t => t.textContent);
+    expect(toasts.some(t => /Syncing/i.test(t) && /Home/.test(t))).toBe(true);
+  });
+
+  test('scopedSyncSucceeding_showsASuccessToastNamingTheProperty', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, runId: 1, overallStatus: 'success', results: [{ propertyId: 1 }] } }
+    );
+    await flush();
+
+    const successToast = [...window.document.querySelectorAll('.toast-success')].find(t => /Home/.test(t.textContent) && /synced/i.test(t.textContent));
+    expect(successToast).toBeDefined();
+  });
+
+  test('scopedSyncFailing_showsAnErrorToastWithTheFailureReason', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, runId: 1, overallStatus: 'failed', results: [{ propertyId: 1, error: 'Invalid credentials' }] } }
+    );
+    await flush();
+
+    const errorToast = [...window.document.querySelectorAll('.toast-error')].find(t => /Invalid credentials/.test(t.textContent));
+    expect(errorToast).toBeDefined();
+  });
+
+  test('scopedSyncSkippedBecauseNotConnected_doesNotShowASuccessToast', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', body: { status: 200, message: 'Skipped — no properties configured' } }
+    );
+    await flush();
+
+    expect([...window.document.querySelectorAll('.toast-success')].some(t => /synced/i.test(t.textContent))).toBe(false);
+    const infoToast = [...window.document.querySelectorAll('.toast-info')].find(t => /Home/.test(t.textContent));
+    expect(infoToast).toBeDefined();
+  });
+
+  test('scopedSyncRejectedBecauseAnotherSyncIsRunning_showsAnErrorToast', async () => {
+    const { window } = await saveWithOptInToggledOn(
+      { method: 'POST', url: '/api/properties/1/sync', ok: false, status: 429, body: { message: 'Sync already in progress' } }
+    );
+    await flush();
+
+    const errorToast = [...window.document.querySelectorAll('.toast-error')].find(t => /already in progress/i.test(t.textContent));
+    expect(errorToast).toBeDefined();
+  });
+});
+
+describe('properties.js - add-property form posts opted_in_bin_type_ids (#35 Task 7)', () => {
+  test('addSaveAndGetGoogleUrl_withAnOptInSwitchChecked_postsTheSelectedBinTypeIds', async () => {
+    const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [
-        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 1 },
-        { id: 2, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', is_garden_waste: 0 },
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+        { id: 2, summary_match: 'Bulky', label: 'Bulky Waste', colour: '#334455', requires_opt_in: 1 },
       ] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
+      { method: 'POST', url: '/api/properties', body: { id: 5 } },
+      { method: 'GET', url: '/api/google/auth-url/5', body: { authUrl: 'https://auth.example' } },
+    ], calls));
+
+    await window.loadSettings();
+    window.document.getElementById('add-label').value = 'Home';
+    window.document.getElementById('add-ics-url').value = 'https://example.com/cal.ics';
+    window.document.getElementById('add-opt-in-2').checked = true;
+    await window.addSaveAndGetGoogleUrl();
+
+    const postCall = calls.find(c => c.method === 'POST' && c.url === '/api/properties');
+    expect(postCall).toBeDefined();
+    expect(postCall.body.opted_in_bin_type_ids).toEqual([2]);
+    expect(postCall.body.garden_waste_opted_in).toBeUndefined();
+  });
+
+  test('addSaveAndGetGoogleUrl_withNoSwitchesChecked_postsAnEmptyArray', async () => {
+    const calls = [];
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+      { method: 'POST', url: '/api/properties', body: { id: 5 } },
+      { method: 'GET', url: '/api/google/auth-url/5', body: { authUrl: 'https://auth.example' } },
+    ], calls));
+
+    await window.loadSettings();
+    window.document.getElementById('add-label').value = 'Home';
+    window.document.getElementById('add-ics-url').value = 'https://example.com/cal.ics';
+    await window.addSaveAndGetGoogleUrl();
+
+    const postCall = calls.find(c => c.method === 'POST' && c.url === '/api/properties');
+    expect(postCall.body.opted_in_bin_type_ids).toEqual([]);
+  });
+});
+
+describe('properties.js - Bin Types requires_opt_in flag, generalized (#35 Task 7)', () => {
+  test('buildBinTypeRow_withRequiresOptInTrue_showsACheckmarkInTheOptInColumn', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+        { id: 2, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', requires_opt_in: 0 },
+      ] },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    const gardenRow = window.document.getElementById('bin-type-row-1');
+    const flaggedRow = window.document.getElementById('bin-type-row-1');
     const otherRow = window.document.getElementById('bin-type-row-2');
-    expect(gardenRow.textContent).toContain('✓');
+    expect(flaggedRow.textContent).toContain('✓');
     expect(otherRow.textContent).not.toContain('✓');
   });
 
-  // PR #34 review finding S3: the bin-type flag defines Garden Waste for
-  // the entire feature (it's what sync.js reads to classify/push/delete),
-  // but had zero explanatory copy - unlike the property-level opt-in
-  // checkbox, which has a full sentence of hint text.
-  test('renderBinTypes_alwaysShowsAHintExplainingWhatTheGardenWasteFlagDoes', async () => {
+  test('renderBinTypes_tableHeaderAndHintText_areGenericNotGardenWasteSpecific', async () => {
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [
-        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 1 },
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
       ] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/determines which events are hidden/i);
+    const section = window.document.getElementById('bin-types-section');
+    expect(section.textContent).toMatch(/opt-in/i);
+    expect(section.textContent).not.toMatch(/Garden Waste collection in the table/i);
+    expect(section.querySelector('th:nth-child(4)').textContent).not.toMatch(/Garden Waste/);
   });
 
-  // If no row is flagged, every property's opt-in toggle is silently
-  // inert - nothing is ever classified as Garden Waste, so opting in or
-  // out does literally nothing. This must be visible, not just true.
-  test('renderBinTypes_whenNoRowIsFlaggedAsGardenWaste_showsInertWarning', async () => {
+  test('renderBinTypes_whenNoRowIsFlaggedOptIn_showsInertWarning', async () => {
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [
-        { id: 1, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', is_garden_waste: 0 },
-        { id: 2, summary_match: 'Blue', label: 'Recycling', colour: '#3b82f6', is_garden_waste: 0 },
+        { id: 1, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', requires_opt_in: 0 },
+        { id: 2, summary_match: 'Blue', label: 'Recycling', colour: '#3b82f6', requires_opt_in: 0 },
       ] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/has no effect/i);
+    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/have no effect/i);
   });
 
   test('renderBinTypes_whenAtLeastOneRowIsFlagged_hidesTheInertWarning', async () => {
@@ -287,93 +556,83 @@ describe('properties.js - Bin Types is_garden_waste flag (#33 Task 7)', () => {
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [
-        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 1 },
-        { id: 2, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', is_garden_waste: 0 },
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+        { id: 2, summary_match: 'Grey', label: 'General Waste', colour: '#6b7280', requires_opt_in: 0 },
       ] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/has no effect/i);
+    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/have no effect/i);
   });
 
   test('renderBinTypes_withNoBinTypesAtAll_doesNotShowTheInertWarning', async () => {
-    // A more fundamental empty state (nothing to flag at all yet) -
-    // distinct from "some exist, none are flagged" - should not trigger
-    // this specific warning.
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
     ]));
 
     await window.loadSettings();
 
-    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/has no effect/i);
+    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/have no effect/i);
   });
 
-  // Confirms the warning is reactive to state, not a one-time render -
-  // flagging a row after initial load must make it disappear without a
-  // page reload, since saveBinTypeEdit already calls renderBinTypes()
-  // again on success.
   test('renderBinTypes_afterFlaggingARowViaEdit_theInertWarningDisappears', async () => {
-    // GET /api/bin-types is re-fetched by renderBinTypes() after the save,
-    // so the mock route must reflect the PUT's effect on the next GET,
-    // like a real server would - a static body here would make this test
-    // pass or fail for the wrong reason.
-    let binTypesState = [{ id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 0 }];
+    let binTypesState = [{ id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 0 }];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: () => binTypesState },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/bin-types/1', body: () => {
-        binTypesState = [{ ...binTypesState[0], is_garden_waste: 1 }];
+        binTypesState = [{ ...binTypesState[0], requires_opt_in: 1 }];
         return { ok: true };
       } },
     ]));
 
     await window.loadSettings();
-    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/has no effect/i);
+    expect(window.document.getElementById('bin-types-section').textContent).toMatch(/have no effect/i);
 
     window.editBinTypeRow(1);
-    window.document.getElementById('bt-garden-1').checked = true;
+    window.document.getElementById('bt-opt-in-1').checked = true;
     await window.saveBinTypeEdit(1);
 
-    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/has no effect/i);
+    expect(window.document.getElementById('bin-types-section').textContent).not.toMatch(/have no effect/i);
   });
 
-  test('saveBinTypeEdit_withGardenWasteCheckboxChecked_persistsIsGardenWasteTrue', async () => {
+  test('saveBinTypeEdit_withOptInCheckboxChecked_persistsRequiresOptInTrue', async () => {
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [
-        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', is_garden_waste: 0 },
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 0 },
       ] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
       { method: 'PUT', url: '/api/bin-types/1', body: { ok: true } },
     ], calls));
 
     await window.loadSettings();
     window.editBinTypeRow(1);
-    window.document.getElementById('bt-garden-1').checked = true;
+    window.document.getElementById('bt-opt-in-1').checked = true;
     await window.saveBinTypeEdit(1);
 
     const putCall = calls.find(c => c.method === 'PUT' && c.url === '/api/bin-types/1');
     expect(putCall).toBeDefined();
-    expect(putCall.body.is_garden_waste).toBe(true);
+    expect(putCall.body.requires_opt_in).toBe(true);
+    expect(putCall.body.is_garden_waste).toBeUndefined();
   });
 
-  test('saveNewBinType_withGardenWasteCheckboxChecked_persistsIsGardenWasteTrue', async () => {
+  test('saveNewBinType_withOptInCheckboxChecked_persistsRequiresOptInTrue', async () => {
     const calls = [];
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
       { method: 'GET', url: '/api/properties', body: [] },
       { method: 'GET', url: '/api/bin-types', body: [] },
-      { method: 'GET', url: '/api/settings/sync-schedule', body: { cronExpression: '0 0 1 * *', nextSync: null } },
+      SCHEDULE_ROUTE,
       { method: 'POST', url: '/api/bin-types', body: { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e' } },
     ], calls));
 
@@ -382,11 +641,27 @@ describe('properties.js - Bin Types is_garden_waste flag (#33 Task 7)', () => {
     window.document.getElementById('new-bt-match').value = 'Garden';
     window.document.getElementById('new-bt-label').value = 'Garden Waste';
     window.document.getElementById('new-bt-colour').value = '#92400e';
-    window.document.getElementById('new-bt-garden').checked = true;
+    window.document.getElementById('new-bt-opt-in').checked = true;
     await window.saveNewBinType();
 
     const postCall = calls.find(c => c.method === 'POST' && c.url === '/api/bin-types');
     expect(postCall).toBeDefined();
-    expect(postCall.body.is_garden_waste).toBe(true);
+    expect(postCall.body.requires_opt_in).toBe(true);
+  });
+
+  test('showAddBinTypeForm_labelText_describesOptInGenericallyNotAsGardenWaste', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [] },
+      SCHEDULE_ROUTE,
+    ]));
+
+    await window.loadSettings();
+    window.showAddBinTypeForm();
+
+    const label = window.document.getElementById('new-bt-opt-in').closest('label');
+    expect(label.textContent).not.toMatch(/Garden Waste/);
+    expect(label.textContent).toMatch(/opt-in/i);
   });
 });

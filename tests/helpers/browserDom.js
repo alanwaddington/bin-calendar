@@ -125,7 +125,8 @@ function mockRouterFetch(routes, calls = []) {
         const body = opts.body ? JSON.parse(opts.body) : undefined;
         calls.push({ method, url, body });
         const responseBody = typeof route.body === 'function' ? route.body() : route.body;
-        return { ok: route.ok !== false, json: async () => responseBody };
+        const status = route.status ?? (route.ok !== false ? 200 : 500);
+        return { ok: route.ok !== false, status, json: async () => responseBody };
       }
     }
     throw new Error(`No mock route for ${method} ${url}`);

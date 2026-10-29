@@ -21,10 +21,14 @@ async function loadSettings() {
       <div id="bin-types-section"></div>
     </div>`;
 
+  // #35 Task 7: renderPropertyAccordions() needs _binTypes already
+  // populated (to know which bin types require opt-in), so bin types must
+  // be fetched before property accordions render - no longer safe to race
+  // all three via one Promise.all.
+  await renderBinTypes();
   await Promise.all([
     renderSyncSchedule(),
     renderPropertyAccordions(),
-    renderBinTypes(),
   ]);
 }
 
@@ -328,14 +332,7 @@ function buildPropertyAccordion(p) {
           <label>Calendar type</label>
           <input value="${escAttr(calType)}" disabled style="background:var(--surface);color:var(--text-3)">
         </div>
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" id="prop-garden-waste-${p.id}" ${p.garden_waste_opted_in ? 'checked' : ''}>
-            Garden Waste collection
-            <span class="badge badge-paid">PAID ADD-ON</span>
-          </label>
-          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Only enable this if your property has an active, paid Garden Waste subscription with the council. Garden waste reminders stay hidden from this app and your calendar until you switch this on.</p>
-        </div>
+        ${buildOptInSwitches(`prop-opt-in-${p.id}`, p.opted_in_bin_type_ids || [])}
         ${showCalPicker ? `
         <div class="form-group">
           <label>Calendar</label>
@@ -357,6 +354,28 @@ function buildPropertyAccordion(p) {
     </div>`;
 }
 
+// #35 Task 7: one switch per bin type flagged requires_opt_in, shared by
+// the edit accordion (idPrefix `prop-opt-in-<propertyId>`) and the add
+// form (idPrefix `add-opt-in`). Zero flagged bin types renders nothing at
+// all - no empty section header.
+function buildOptInSwitches(idPrefix, optedInIds) {
+  const flagged = _binTypes.filter(bt => bt.requires_opt_in);
+  if (flagged.length === 0) return '';
+  return `
+        <div class="form-group">
+          <label>Opt-in collections</label>
+          <div class="opt-in-switches">
+            ${flagged.map(bt => `
+            <label class="checkbox-label">
+              <input type="checkbox" id="${idPrefix}-${bt.id}" data-bin-type-id="${bt.id}" ${optedInIds.includes(bt.id) ? 'checked' : ''}>
+              <span class="bin-type-colour-dot" style="background:${escAttr(bt.colour)}"></span>
+              ${escHtml(bt.label)}
+            </label>`).join('')}
+          </div>
+          <p style="font-size:12px;color:var(--text-3);margin-top:4px">These are opt-in collections &mdash; switch one on only if this property is enrolled with the council for it. Enabled collections sync to your calendar immediately; the rest stay hidden.</p>
+        </div>`;
+}
+
 async function loadGoogleCalendarsForProp(propertyId, currentCalendarId) {
   const sel = document.getElementById(`cal-select-${propertyId}`);
   if (!sel) return;
@@ -373,31 +392,35 @@ async function loadGoogleCalendarsForProp(propertyId, currentCalendarId) {
 async function savePropertyEdit(id) {
   const label = document.getElementById(`prop-label-${id}`)?.value.trim();
   const ics_url = document.getElementById(`prop-ics-url-${id}`)?.value.trim();
-  const gardenEl = document.getElementById(`prop-garden-waste-${id}`);
   const errorEl = document.getElementById(`prop-save-error-${id}`);
   if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
 
   const p = _settingsProperties.find(prop => prop.id === id);
-  const gardenWasteOptedIn = gardenEl ? gardenEl.checked : false;
-  // #33 Task 7 (Should): switching opted-in -> opted-out is a real
+  const flagged = _binTypes.filter(bt => bt.requires_opt_in);
+  const prevIds = new Set(p?.opted_in_bin_type_ids || []);
+  const newIds = flagged.filter(bt => document.getElementById(`prop-opt-in-${id}-${bt.id}`)?.checked).map(bt => bt.id);
+  const newIdSet = new Set(newIds);
+  const changed = prevIds.size !== newIdSet.size || [...newIdSet].some(binTypeId => !prevIds.has(binTypeId));
+  // #35 Task 7: switching any opted-in bin type to opted-out is a real
   // destructive side effect on the user's actual external calendar (it
-  // removes already-pushed garden waste events on the next sync) - warn
-  // before saving, per the Analysis. Every other transition (unchanged,
-  // turning on, or a brand-new property with no prior pushed state) saves
-  // immediately exactly as before.
-  if (p && p.garden_waste_opted_in === 1 && !gardenWasteOptedIn) {
-    showGardenWasteOffWarning(id, label, ics_url);
+  // removes already-pushed events immediately, now that saving triggers a
+  // scoped sync) - warn before saving, naming every affected bin type.
+  // Every other transition (unchanged, turning one on, or a brand-new
+  // property with no prior pushed state) saves immediately as before.
+  const turnedOff = flagged.filter(bt => prevIds.has(bt.id) && !newIdSet.has(bt.id));
+  if (turnedOff.length > 0) {
+    showOptInOffWarning(id, label, ics_url, turnedOff, newIds);
     return;
   }
 
-  await performPropertySave(id, label, ics_url, gardenWasteOptedIn);
+  await performPropertySave(id, label, ics_url, newIds, changed);
 }
 
-async function performPropertySave(id, label, ics_url, gardenWasteOptedIn) {
+async function performPropertySave(id, label, ics_url, optedInBinTypeIds, changed) {
   const errorEl = document.getElementById(`prop-save-error-${id}`);
   try {
-    await api('PUT', `/api/properties/${id}`, { label, ics_url, garden_waste_opted_in: gardenWasteOptedIn });
+    await api('PUT', `/api/properties/${id}`, { label, ics_url, opted_in_bin_type_ids: optedInBinTypeIds });
     const p = _settingsProperties.find(prop => prop.id === id);
     if (p && p.connected && p.calendar_type === 'google') {
       const calSel = document.getElementById(`cal-select-${id}`);
@@ -407,8 +430,32 @@ async function performPropertySave(id, label, ics_url, gardenWasteOptedIn) {
     }
     showToast('Property updated');
     await renderPropertyAccordions();
+    // #35 Task 7: fire-and-forget - Save has already completed and the
+    // user is free to navigate away while this runs in the background.
+    if (changed) triggerScopedSync(id, label);
   } catch (err) {
     if (errorEl) errorEl.textContent = err.message;
+  }
+}
+
+// #35 Task 7: triggers a sync scoped to just this property right after an
+// opt-in change is saved, instead of waiting for the next scheduled/global
+// sync. Reports its start and outcome via toast; never claims success for
+// a skipped (not-connected) run.
+async function triggerScopedSync(id, label) {
+  showToast(`Syncing ${label}…`);
+  try {
+    const result = await api('POST', `/api/properties/${id}/sync`);
+    if (result.message && result.message.startsWith('Skipped')) {
+      showToast(`${label} isn't connected to a calendar yet — nothing synced`, 'info');
+    } else if (result.overallStatus === 'failed') {
+      const err = result.results?.[0]?.error;
+      showToast(`Sync failed for ${label}${err ? ': ' + err : ''}`, 'error');
+    } else {
+      showToast(`${label} synced`);
+    }
+  } catch (err) {
+    showToast(err.message === 'HTTP 429' ? `A sync is already in progress — try ${label} again shortly.` : err.message, 'error');
   }
 }
 
@@ -416,21 +463,32 @@ async function performPropertySave(id, label, ics_url, gardenWasteOptedIn) {
 // no keyboard or backdrop dismissal, and no focus management - it could
 // only be dismissed by mouse-clicking Cancel. role="dialog"/aria-modal/
 // aria-labelledby identify it to assistive tech; Escape and a backdrop
-// click both behave exactly like Cancel (re-check the box, save nothing) -
-// the conventional dismissal affordance for this kind of overlay; and
-// focus moves to Cancel on open, the safe (non-destructive) default
-// action, so keyboard users land somewhere sensible immediately.
-function showGardenWasteOffWarning(id, label, ics_url) {
-  const gardenEl = document.getElementById(`prop-garden-waste-${id}`);
+// click both behave exactly like Cancel (re-check the box(es), save
+// nothing) - the conventional dismissal affordance for this kind of
+// overlay; and focus moves to Cancel on open, the safe (non-destructive)
+// default action, so keyboard users land somewhere sensible immediately.
+// #35 Task 7: generalized from a single Garden Waste checkbox to any
+// number of bin types turned off in one save - turnedOff names every one
+// of them, in both the title (when there's exactly one) and the body.
+function showOptInOffWarning(id, label, ics_url, turnedOff, newIds) {
+  const checkboxes = turnedOff.map(bt => document.getElementById(`prop-opt-in-${id}-${bt.id}`));
+  const labels = turnedOff.map(bt => escHtml(bt.label));
+  const title = turnedOff.length === 1
+    ? `Turn off ${labels[0]}?`
+    : `Turn off ${turnedOff.length} collections?`;
+  const body = turnedOff.length === 1
+    ? `${labels[0]} events already on your calendar will be removed immediately. Your other collections won&rsquo;t be affected.`
+    : `${turnedOff.length} collections (${labels.join(', ')}) already on your calendar will be removed immediately. Your other collections won&rsquo;t be affected.`;
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="garden-waste-warning-title">
-      <div class="modal-title" id="garden-waste-warning-title">Turn off Garden Waste collection?</div>
-      <p class="modal-body">Garden waste events already added to your calendar will be removed when this property next syncs. Your other bin collections won&rsquo;t be affected.</p>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="opt-in-warning-title">
+      <div class="modal-title" id="opt-in-warning-title">${title}</div>
+      <p class="modal-body">${body}</p>
       <div class="modal-actions">
-        <button class="btn btn-secondary btn-sm" id="garden-waste-warning-cancel">Cancel</button>
-        <button class="btn btn-danger btn-sm" id="garden-waste-warning-confirm">Turn off &amp; save</button>
+        <button class="btn btn-secondary btn-sm" id="opt-in-warning-cancel">Cancel</button>
+        <button class="btn btn-danger btn-sm" id="opt-in-warning-confirm">Turn off &amp; save</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -445,15 +503,15 @@ function showGardenWasteOffWarning(id, label, ics_url) {
   }
 
   function cancel() {
-    if (gardenEl) gardenEl.checked = true;
+    checkboxes.forEach(cb => { if (cb) cb.checked = true; });
     closeModal();
   }
 
-  const cancelBtn = document.getElementById('garden-waste-warning-cancel');
+  const cancelBtn = document.getElementById('opt-in-warning-cancel');
   cancelBtn.onclick = cancel;
-  document.getElementById('garden-waste-warning-confirm').onclick = async () => {
+  document.getElementById('opt-in-warning-confirm').onclick = async () => {
     closeModal();
-    await performPropertySave(id, label, ics_url, false);
+    await performPropertySave(id, label, ics_url, newIds, true);
   };
   overlay.addEventListener('click', e => {
     if (e.target === overlay) cancel();
@@ -677,14 +735,7 @@ function buildAddPropertyAccordion() {
             <option value="icloud">iCloud</option>
           </select>
         </div>
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" id="add-garden-waste">
-            Garden Waste collection
-            <span class="badge badge-paid">PAID ADD-ON</span>
-          </label>
-          <p style="font-size:12px;color:var(--text-3);margin-top:4px">Only enable this if your property has an active, paid Garden Waste subscription with the council. Garden waste reminders stay hidden from this app and your calendar until you switch this on.</p>
-        </div>
+        ${buildOptInSwitches('add-opt-in', [])}
         <div id="add-calendar-fields"></div>
         <div id="add-form-error" class="form-error"></div>
       </div>
@@ -763,9 +814,9 @@ async function addSaveAndGetGoogleUrl() {
   const errorEl = document.getElementById('add-form-error');
   if (!label || !ics_url) { errorEl.textContent = 'Label and ICS Calendar URL are required'; return; }
   errorEl.textContent = '';
-  const garden_waste_opted_in = document.getElementById('add-garden-waste')?.checked || false;
+  const opted_in_bin_type_ids = _binTypes.filter(bt => bt.requires_opt_in && document.getElementById(`add-opt-in-${bt.id}`)?.checked).map(bt => bt.id);
   try {
-    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'google', garden_waste_opted_in });
+    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'google', opted_in_bin_type_ids });
     const { authUrl } = await api('GET', `/api/google/auth-url/${id}`);
     document.getElementById('add-google-auth-link').href = authUrl;
     document.getElementById('add-google-step1').style.display = 'none';
@@ -849,9 +900,9 @@ async function addSaveIcloud() {
     return;
   }
   errorEl.textContent = '';
-  const garden_waste_opted_in = document.getElementById('add-garden-waste')?.checked || false;
+  const opted_in_bin_type_ids = _binTypes.filter(bt => bt.requires_opt_in && document.getElementById(`add-opt-in-${bt.id}`)?.checked).map(bt => bt.id);
   try {
-    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'icloud', garden_waste_opted_in });
+    const { id } = await api('POST', '/api/properties', { label, ics_url, calendar_type: 'icloud', opted_in_bin_type_ids });
     await api('POST', `/api/properties/${id}/icloud`, {
       apple_id: appleId, app_specific_password: pass, calendar_url: calUrl,
     });
@@ -876,19 +927,20 @@ async function renderBinTypes() {
   if (!el) return;
 
   // PR #34 review finding S3: the bin-type flag is what actually DEFINES
-  // Garden Waste for the whole feature (sync.js reads it to classify/push/
-  // delete) - unlike the property-level opt-in checkbox, it had no
-  // explanatory copy. Reactively warns when no row is flagged at all,
-  // since in that state every property's opt-in toggle is silently inert
-  // - this recomputes on every render (already called again after any
-  // add/edit/delete), so it needs no separate dismiss mechanism.
-  const noRowFlagged = _binTypes.length > 0 && _binTypes.every(bt => !bt.is_garden_waste);
+  // which bin types are opt-in for the whole feature (sync.js reads it to
+  // classify/push/delete) - unlike the property-level opt-in switches, it
+  // had no explanatory copy. Reactively warns when no row is flagged at
+  // all, since in that state every property's opt-in switches are
+  // silently inert - this recomputes on every render (already called
+  // again after any add/edit/delete), so it needs no separate dismiss
+  // mechanism.
+  const noRowFlagged = _binTypes.length > 0 && _binTypes.every(bt => !bt.requires_opt_in);
 
   el.innerHTML = `
-    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">Flag which bin type(s) represent Garden Waste collection in the table below &mdash; this determines which events are hidden from display, withheld from sync, or removed from a calendar for any property that hasn&rsquo;t opted in.</p>
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px">Flag which bin type(s) require an opt-in before they're displayed, synced, or removed for a property &mdash; e.g. a paid add-on collection. Properties can switch each flagged type on or off independently.</p>
     ${noRowFlagged ? `
     <div class="badge badge-warning" style="display:block;margin-bottom:16px;padding:8px 12px;border-radius:6px;font-size:12px">
-      No bin type is flagged as Garden Waste yet &mdash; until one is, every property&rsquo;s Garden Waste opt-in has no effect.
+      No bin type is flagged as opt-in required yet &mdash; until one is, no property shows an opt-in switch, and these settings have no effect.
     </div>` : ''}
     <table class="bin-types-table">
       <thead>
@@ -896,7 +948,7 @@ async function renderBinTypes() {
           <th>Match</th>
           <th>Label</th>
           <th>Colour</th>
-          <th>Garden Waste</th>
+          <th>Opt-in required</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -919,7 +971,7 @@ function buildBinTypeRow(bt) {
           ${escHtml(bt.colour)}
         </span>
       </td>
-      <td>${bt.is_garden_waste ? '<span style="color:var(--success);font-weight:700">✓</span>' : ''}</td>
+      <td>${bt.requires_opt_in ? '<span style="color:var(--success);font-weight:700">✓</span>' : ''}</td>
       <td style="display:flex;gap:6px;align-items:center">
         <button class="btn btn-secondary btn-sm" onclick="editBinTypeRow(${bt.id})">Edit</button>
         <button class="btn btn-danger btn-sm" id="bt-del-btn-${bt.id}" onclick="confirmDeleteBinType(${bt.id})">Delete</button>
@@ -936,7 +988,7 @@ function editBinTypeRow(id) {
     <td><input id="bt-match-${id}" value="${escAttr(bt.summary_match)}" style="min-width:80px"></td>
     <td><input id="bt-label-${id}" value="${escAttr(bt.label)}" style="min-width:80px"></td>
     <td><input id="bt-colour-${id}" type="color" value="${escAttr(bt.colour)}" style="width:60px"></td>
-    <td><input type="checkbox" id="bt-garden-${id}" ${bt.is_garden_waste ? 'checked' : ''}></td>
+    <td><input type="checkbox" id="bt-opt-in-${id}" ${bt.requires_opt_in ? 'checked' : ''}></td>
     <td style="display:flex;gap:6px;align-items:center">
       <button class="btn btn-primary btn-sm" onclick="saveBinTypeEdit(${id})">Save</button>
       <button class="btn btn-secondary btn-sm" onclick="renderBinTypes()">Cancel</button>
@@ -947,10 +999,10 @@ async function saveBinTypeEdit(id) {
   const match = document.getElementById(`bt-match-${id}`)?.value.trim();
   const label = document.getElementById(`bt-label-${id}`)?.value.trim();
   const colour = document.getElementById(`bt-colour-${id}`)?.value;
-  const is_garden_waste = document.getElementById(`bt-garden-${id}`)?.checked || false;
+  const requires_opt_in = document.getElementById(`bt-opt-in-${id}`)?.checked || false;
   if (!match || !label || !colour) { showToast('All fields are required', 'error'); return; }
   try {
-    await api('PUT', `/api/bin-types/${id}`, { summary_match: match, label, colour, is_garden_waste });
+    await api('PUT', `/api/bin-types/${id}`, { summary_match: match, label, colour, requires_opt_in });
     showToast('Bin type updated');
     await renderBinTypes();
   } catch (err) {
@@ -999,8 +1051,8 @@ function showAddBinTypeForm() {
         </div>
       </div>
       <label class="checkbox-label" style="margin-bottom:var(--space-sm)">
-        <input type="checkbox" id="new-bt-garden">
-        This is the Garden Waste bin type
+        <input type="checkbox" id="new-bt-opt-in">
+        Requires opt-in before syncing
       </label>
       <div id="new-bt-error" class="form-error" style="margin-bottom:var(--space-sm)"></div>
       <div style="display:flex;gap:var(--space-sm)">
@@ -1020,12 +1072,12 @@ async function saveNewBinType() {
   const match = document.getElementById('new-bt-match')?.value.trim();
   const label = document.getElementById('new-bt-label')?.value.trim();
   const colour = document.getElementById('new-bt-colour')?.value;
-  const is_garden_waste = document.getElementById('new-bt-garden')?.checked || false;
+  const requires_opt_in = document.getElementById('new-bt-opt-in')?.checked || false;
   const errorEl = document.getElementById('new-bt-error');
   if (!match || !label || !colour) { errorEl.textContent = 'All fields are required'; return; }
   errorEl.textContent = '';
   try {
-    await api('POST', '/api/bin-types', { summary_match: match, label, colour, is_garden_waste });
+    await api('POST', '/api/bin-types', { summary_match: match, label, colour, requires_opt_in });
     showToast('Bin type added');
     await renderBinTypes();
   } catch (err) {
