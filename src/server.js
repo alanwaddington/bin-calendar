@@ -35,10 +35,19 @@ app.get('/api/config', (req, res) => {
 
 // ── Properties ─────────────────────────────────────────────────────────────
 app.get('/api/properties', (req, res) => {
-  const rows = getDb().prepare(
-    'SELECT id, label, ics_url, calendar_type, calendar_id, garden_waste_opted_in, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT id, label, ics_url, calendar_type, calendar_id, created_at, updated_at, (credentials IS NOT NULL) as connected, credential_status, credential_checked_at FROM properties'
   ).all();
-  res.json(rows);
+  // #35: one extra query for every opt-in row across every property,
+  // grouped in JS - not one query per property.
+  const optInRows = db.prepare('SELECT property_id, bin_type_id FROM property_bin_type_opt_ins').all();
+  const optInsByProperty = new Map();
+  for (const row of optInRows) {
+    if (!optInsByProperty.has(row.property_id)) optInsByProperty.set(row.property_id, []);
+    optInsByProperty.get(row.property_id).push(row.bin_type_id);
+  }
+  res.json(rows.map(p => ({ ...p, opted_in_bin_type_ids: optInsByProperty.get(p.id) || [] })));
 });
 
 function isValidIcsUrl(url) {
@@ -54,31 +63,62 @@ function toBoolInt(value) {
   return value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
 }
 
+// #35: replaces a property's full opt-in set - DELETE then INSERT one row
+// per id. Callers wrap this in their own db.transaction() alongside
+// whatever else the request is doing, so a bad id (FK violation) rolls
+// back everything in that request, not just this table.
+function replaceOptIns(db, propertyId, binTypeIds) {
+  db.prepare('DELETE FROM property_bin_type_opt_ins WHERE property_id = ?').run(propertyId);
+  const insert = db.prepare('INSERT INTO property_bin_type_opt_ins (property_id, bin_type_id) VALUES (?, ?)');
+  for (const binTypeId of binTypeIds) insert.run(propertyId, binTypeId);
+}
+
 app.post('/api/properties', (req, res) => {
-  const { label, ics_url, calendar_type, garden_waste_opted_in } = req.body;
+  const { label, ics_url, calendar_type, opted_in_bin_type_ids } = req.body;
   if (!label || !ics_url || !calendar_type) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
-  const result = getDb().prepare(
-    'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id, garden_waste_opted_in) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null, toBoolInt(garden_waste_opted_in));
-  res.status(201).json({ id: result.lastInsertRowid });
+  const db = getDb();
+  try {
+    const id = db.transaction(() => {
+      const result = db.prepare(
+        'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id) VALUES (?, ?, ?, ?, ?)'
+      ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null);
+      if (Array.isArray(opted_in_bin_type_ids)) {
+        replaceOptIns(db, result.lastInsertRowid, opted_in_bin_type_ids);
+      }
+      return result.lastInsertRowid;
+    })();
+    res.status(201).json({ id });
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+      return res.status(400).json({ error: 'One or more bin type ids do not exist' });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.put('/api/properties/:id', (req, res) => {
-  const { label, ics_url, garden_waste_opted_in } = req.body;
+  const { label, ics_url, opted_in_bin_type_ids } = req.body;
   if (!label || !ics_url) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
-  // garden_waste_opted_in is only touched when the caller actually sends it
-  // - omitting it must preserve whatever the property is already set to,
-  // not reset it to a default (unlike POST, where there's no prior value
-  // to preserve).
-  if (garden_waste_opted_in === undefined) {
-    getDb().prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
-  } else {
-    getDb().prepare('UPDATE properties SET label = ?, ics_url = ?, garden_waste_opted_in = ? WHERE id = ?')
-      .run(label, ics_url, toBoolInt(garden_waste_opted_in), req.params.id);
+  const db = getDb();
+  try {
+    db.transaction(() => {
+      db.prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+      // #35: opted_in_bin_type_ids is only touched when the caller actually
+      // sends it - omitting it must preserve the existing opt-in set,
+      // mirroring the old garden_waste_opted_in behaviour.
+      if (Array.isArray(opted_in_bin_type_ids)) {
+        replaceOptIns(db, req.params.id, opted_in_bin_type_ids);
+      }
+    })();
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+      return res.status(400).json({ error: 'One or more bin type ids do not exist' });
+    }
+    res.status(500).json({ error: err.message });
   }
-  res.json({ ok: true });
 });
 
 app.delete('/api/properties/:id', (req, res) => {
@@ -480,17 +520,17 @@ app.get('/api/bin-types', (req, res) => {
 const HEX_COLOUR_RE = /^#[0-9a-fA-F]{6}$/;
 
 function sanitiseBinTypeInput(body) {
-  const { summary_match, label, colour, is_garden_waste } = body;
+  const { summary_match, label, colour, requires_opt_in } = body;
   if (!summary_match || !label || !colour) return { error: 'Missing fields: summary_match, label, colour required' };
   if (!HEX_COLOUR_RE.test(colour)) return { error: 'Invalid colour: must be a 6-digit hex value (e.g. #6b7280)' };
   // PR #34 review finding C1: validation previously ran BEFORE wildcard
   // stripping, so a Match of pure wildcards (e.g. "%") passed the !summary_match
   // check and was persisted as an empty string - catastrophic once consumed
-  // by sync.js's Garden Waste classification (an empty matcher matches
-  // every event). Strip first, then reject if nothing meaningful remains.
+  // by sync.js's opt-in classification (an empty matcher matches every
+  // event). Strip first, then reject if nothing meaningful remains.
   const strippedMatch = summary_match.replace(/[%_]/g, '').trim();
   if (!strippedMatch) return { error: 'Invalid match text: must contain at least one non-wildcard character' };
-  return { summary_match: strippedMatch, label, colour, is_garden_waste: toBoolInt(is_garden_waste) };
+  return { summary_match: strippedMatch, label, colour, requires_opt_in: toBoolInt(requires_opt_in) };
 }
 
 app.post('/api/bin-types', (req, res) => {
@@ -498,9 +538,9 @@ app.post('/api/bin-types', (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   try {
     const result = getDb().prepare(
-      'INSERT INTO bin_types (summary_match, label, colour, is_garden_waste) VALUES (?, ?, ?, ?)'
-    ).run(input.summary_match, input.label, input.colour, input.is_garden_waste);
-    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour, is_garden_waste: input.is_garden_waste });
+      'INSERT INTO bin_types (summary_match, label, colour, requires_opt_in) VALUES (?, ?, ?, ?)'
+    ).run(input.summary_match, input.label, input.colour, input.requires_opt_in);
+    res.status(201).json({ id: result.lastInsertRowid, summary_match: input.summary_match, label: input.label, colour: input.colour, requires_opt_in: input.requires_opt_in });
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'A bin type with that match text already exists' });
@@ -514,8 +554,8 @@ app.put('/api/bin-types/:id', (req, res) => {
   if (input.error) return res.status(400).json({ error: input.error });
   try {
     const result = getDb().prepare(
-      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ?, is_garden_waste = ? WHERE id = ?'
-    ).run(input.summary_match, input.label, input.colour, input.is_garden_waste, req.params.id);
+      'UPDATE bin_types SET summary_match = ?, label = ?, colour = ?, requires_opt_in = ? WHERE id = ?'
+    ).run(input.summary_match, input.label, input.colour, input.requires_opt_in, req.params.id);
     if (result.changes === 0) return res.status(404).json({ error: 'Bin type not found' });
     res.json({ ok: true });
   } catch (err) {
