@@ -1294,4 +1294,158 @@ describe('sync', () => {
 
     expect(google.deleteEvent).not.toHaveBeenCalled();
   });
+
+  // PR #36 review finding S1: existingByUid is listed within [timeMin,
+  // timeMax] derived purely from the CURRENT feed's own min/max dates. If a
+  // removed event happened to define the old edge of that window, its
+  // removal could shrink the window and the stale event could fall outside
+  // it entirely - never even listed, so never reconciled away. Widened to
+  // always cover at least [today, today+6 months] (matching cacheEvents'
+  // own bound), regardless of how narrow or wide the current feed happens
+  // to be - a pure widening, never narrower than the feed's own range.
+
+  function daysBetween(a, b) {
+    return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
+  }
+
+  test('runSync_feedDatesNarrowerThanSixMonths_widensTimeMaxToAtLeastSixMonthsAhead', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    const narrowDate = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000); // only 10 days out
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Grey Bin', start: narrowDate, end: narrowDate, description: '', allDay: false }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    const [, , timeMaxArg] = google.listEvents.mock.calls[0];
+    const sixMonthsAhead = new Date();
+    sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
+    // timeMax must reach at least ~6 months out, not be stuck at the narrow feed date 10 days out.
+    expect(daysBetween(new Date(), timeMaxArg)).toBeGreaterThan(150);
+    expect(Math.abs(daysBetween(timeMaxArg, sixMonthsAhead))).toBeLessThanOrEqual(1);
+  });
+
+  test('runSync_feedDatesWiderThanSixMonths_keepsTimeMaxAtTheFeedsOwnLaterDate', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    const wideDate = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000); // ~13 months out
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Grey Bin', start: wideDate, end: wideDate, description: '', allDay: false }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    const [, , timeMaxArg] = google.listEvents.mock.calls[0];
+    // Must NOT be narrowed down to the 6-month bound - the feed's own wider date wins.
+    expect(Math.abs(daysBetween(timeMaxArg, wideDate))).toBeLessThanOrEqual(1);
+  });
+
+  test('runSync_feedMinDateAfterToday_widensTimeMinBackToToday', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    const futureOnlyDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // feed's earliest date is 30 days out
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Grey Bin', start: futureOnlyDate, end: futureOnlyDate, description: '', allDay: false }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    const [, timeMinArg] = google.listEvents.mock.calls[0];
+    // timeMin must reach back to ~today, not stay pinned at the feed's own +30-day minimum.
+    expect(Math.abs(daysBetween(new Date(), timeMinArg))).toBeLessThanOrEqual(1);
+  });
+
+  test('runSync_feedMinDateBeforeToday_keepsTimeMinAtTheFeedsOwnEarlierDate', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([]);
+    const pastDate = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000); // feed includes a recently-past date
+    fetchIcs.mockResolvedValue({
+      events: [{ uid: 'evt-1', summary: 'Grey Bin', start: pastDate, end: pastDate, description: '', allDay: false }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    const [, timeMinArg] = google.listEvents.mock.calls[0];
+    // Pre-existing behaviour preserved - must NOT be clamped forward to today.
+    expect(Math.abs(daysBetween(timeMinArg, pastDate))).toBeLessThanOrEqual(1);
+  });
+
+  // PR #36 review finding S2: makes the disjointness between the Garden
+  // Waste opt-out delete branch and the stale-reconciliation delete branch
+  // observable in the suite itself - one event satisfying each condition,
+  // in the SAME run, rather than arguing it from reading the code.
+  test('runSync_gardenWasteDeleteAndStaleReconciliationDelete_bothFireInTheSameRunWithoutInterfering', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-garden', summary: 'Garden waste',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    // On the external calendar: the garden-waste event (still in the feed,
+    // but opted-out -> handled by the Garden Waste branch) AND a second,
+    // entirely unrelated event the council has since removed from the feed
+    // -> handled by the stale-reconciliation branch.
+    google.listEvents.mockResolvedValue([
+      { iCalUID: 'evt-garden', id: 'google-id-garden' },
+      { iCalUID: 'evt-cancelled', id: 'google-id-cancelled' },
+    ]);
+
+    await runSync();
+
+    expect(google.deleteEvent).toHaveBeenCalledTimes(2);
+    expect(google.deleteEvent).toHaveBeenCalledWith(property, 'google-id-garden');
+    expect(google.deleteEvent).toHaveBeenCalledWith(property, 'google-id-cancelled');
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const resultRunCall = runCalls.find(args => args.length === 8 && args[1] === 1);
+    expect(resultRunCall[4]).toBe(2); // both deletions counted
+  });
 });

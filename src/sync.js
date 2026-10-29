@@ -101,9 +101,21 @@ async function syncProperty(db, runId, property, gardenMatchers) {
       return { propertyId: property.id };
     }
 
+    // PR #36 review finding S1: widened to always cover at least
+    // [today, today+6 months] (matching cacheEvents' own bound), regardless
+    // of how narrow or wide the current feed's own date range happens to
+    // be - a pure widening, never narrower than the feed's own range. Without
+    // this, a stale event could define the old edge of a feed-derived
+    // window; removing it from the feed would then shrink the window along
+    // with it, so existingByUid's listing call would never even see it and
+    // the reconciliation pass below could never catch it.
     const dates = events.map(e => e.start);
-    const timeMin = new Date(Math.min(...dates));
-    const timeMax = new Date(Math.max(...dates));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const sixMonthsAhead = new Date();
+    sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
+    const timeMin = new Date(Math.min(...dates, today.getTime()));
+    const timeMax = new Date(Math.max(...dates, sixMonthsAhead.getTime()));
 
     // #33: classified against the full in-memory feed below (whatever
     // range fetchIcs actually returned - often ~14 months), never against
