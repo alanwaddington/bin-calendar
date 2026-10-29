@@ -14,6 +14,35 @@ function flush() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+// PR #37 review M5: concurrent toasts (now routine - a save can fire a
+// "Property updated", a "Syncing…", and a result toast in quick
+// succession) previously all rendered at the same fixed position with no
+// stacking container, so they visually overlapped. All toasts must now
+// share one stacking container instead of being independent fixed-
+// position children of <body>.
+describe('app.js - toast stacking (PR #37 review M5)', () => {
+  test('showToast_calledMultipleTimes_appendsAllToastsIntoASharedStackingContainer', () => {
+    const window = createSettingsWindow(mockRouterFetch([CONFIG_ROUTE]));
+
+    window.showToast('First');
+    window.showToast('Second', 'error');
+
+    const toasts = window.document.querySelectorAll('.toast');
+    expect(toasts.length).toBe(2);
+    expect(toasts[0].parentElement).toBe(toasts[1].parentElement);
+    expect(toasts[0].parentElement).not.toBe(window.document.body);
+  });
+
+  test('showToast_calledTwice_reusesTheSameStackingContainerRatherThanCreatingANewOneEachTime', () => {
+    const window = createSettingsWindow(mockRouterFetch([CONFIG_ROUTE]));
+
+    window.showToast('First');
+    window.showToast('Second');
+
+    expect(window.document.querySelectorAll('.toast-stack').length).toBe(1);
+  });
+});
+
 describe('properties.js - per-bin-type opt-in switches (#35 Task 7)', () => {
   test('buildAddPropertyAccordion_withNoFlaggedBinTypes_rendersNoOptInSwitches', async () => {
     const window = createSettingsWindow(mockRouterFetch([

@@ -34,6 +34,7 @@
   --info-bg:        rgba(37, 99, 235, 0.10);
   --muted:          #64748b;
   --muted-bg:       rgba(100, 116, 139, 0.10);
+  --muted-dark:     #f1f5f9;
   --partial:        #ea580c;
   --partial-bg:     rgba(234, 88, 12, 0.10);
 
@@ -996,16 +997,26 @@ input[type="checkbox"] {
 .log-result:last-child { border-bottom: none; }
 
 /* ── Toast ───────────────────────────────────────────────────── */
-.toast {
+/* PR #37 review finding M5: a shared stacking container, positioned
+   once, instead of each .toast fixing its own position - letting
+   several concurrent toasts stack vertically rather than overlap. */
+.toast-stack {
   position: fixed;
   bottom: 24px;
   right: 24px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.toast {
   padding: 12px 18px;
   border-radius: var(--radius-md);
   font-family: var(--font-body);
   font-size: 13px;
   font-weight: 500;
-  z-index: 999;
   max-width: 340px;
   animation: toastIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   box-shadow: var(--shadow-lg);
@@ -1031,8 +1042,13 @@ input[type="checkbox"] {
   border: 1px solid rgba(22,163,74,0.25);
 }
 
+/* PR #37 review finding M4: --muted-bg is a 10%-alpha fill meant for an
+   inline badge sitting on an opaque surface - as a position:fixed
+   overlay it let the page show through, with low-contrast text on top.
+   --muted-dark is opaque, matching the --success-dark/--danger-dark
+   pattern the other two toast variants already use. */
 .toast-info {
-  background: var(--muted-bg);
+  background: var(--muted-dark);
   color: var(--muted);
   border: 1px solid var(--border);
 }
@@ -1209,7 +1225,8 @@ input[type="checkbox"] {
   .topnav { padding: 0 var(--space-md); }
   .page-content { padding: var(--space-md) var(--space-sm); }
   .sync-health { flex-direction: column; align-items: flex-start; }
-  .toast { right: var(--space-sm); left: var(--space-sm); max-width: 100%; }
+  .toast-stack { right: var(--space-sm); left: var(--space-sm); align-items: stretch; }
+  .toast { max-width: 100%; }
 }
 
 /* ── Scrollbar ───────────────────────────────────────────────── */
