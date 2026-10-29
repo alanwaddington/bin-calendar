@@ -80,6 +80,28 @@ describe('properties.js - per-bin-type opt-in switches (#35 Task 7)', () => {
     expect(accordion.innerHTML).not.toMatch(/PAID ADD-ON/);
   });
 
+  // PR #37 review finding m8: a bare <label>Opt-in collections</label>
+  // isn't programmatically associated with the group of checkboxes below
+  // it - a <fieldset>/<legend> gives assistive tech a real accessible
+  // name for the group, not just for each individual switch.
+  test('buildOptInSwitches_groupsSwitchesInAFieldsetWithAnAccessibleLegend', async () => {
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [] },
+      { method: 'GET', url: '/api/bin-types', body: [
+        { id: 1, summary_match: 'Garden', label: 'Garden Waste', colour: '#92400e', requires_opt_in: 1 },
+      ] },
+      SCHEDULE_ROUTE,
+    ]));
+
+    await window.loadSettings();
+
+    const fieldset = window.document.querySelector('#acc-add-prop fieldset');
+    expect(fieldset).not.toBeNull();
+    expect(fieldset.querySelector('legend').textContent).toMatch(/Opt-in collections/i);
+    expect(fieldset.querySelector('#add-opt-in-1')).not.toBeNull();
+  });
+
   test('buildAddPropertyAccordion_withTwoFlaggedBinTypes_rendersTwoSwitches', async () => {
     const window = createSettingsWindow(mockRouterFetch([
       CONFIG_ROUTE,
@@ -358,6 +380,58 @@ describe('properties.js - saving opt-in switches (#35 Task 7)', () => {
     expect(window.document.activeElement.id).toBe('opt-in-warning-cancel');
   });
 
+  // PR #37 review finding m8: Cancel must return focus to wherever it
+  // was before the modal opened (the Save button, the realistic
+  // trigger), not leave a keyboard user stranded on <body>.
+  test('optInOffWarning_cancel_restoresFocusToThePreviouslyFocusedElement', async () => {
+    const property = {
+      id: 1, label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'icloud',
+      calendar_id: 'x', connected: false, credential_status: 'unknown', opted_in_bin_type_ids: [1],
+    };
+    const window = createSettingsWindow(mockRouterFetch([
+      CONFIG_ROUTE,
+      { method: 'GET', url: '/api/properties', body: [property] },
+      flaggedBinTypesRoute(),
+      SCHEDULE_ROUTE,
+      { method: 'PUT', url: '/api/properties/1', body: { ok: true } },
+    ]));
+
+    await window.loadSettings();
+    window.document.getElementById('prop-opt-in-1-1').checked = false;
+    const saveBtn = window.document.querySelector('button[onclick="savePropertyEdit(1)"]');
+    saveBtn.focus();
+    await window.savePropertyEdit(1);
+    window.document.getElementById('opt-in-warning-cancel').click();
+
+    expect(window.document.activeElement).toBe(saveBtn);
+  });
+
+  // PR #37 review finding m8: a focus trap - Tab/Shift+Tab must cycle
+  // between the modal's own two buttons rather than escaping into the
+  // page behind the overlay. With exactly two focusable elements, Tab
+  // and Shift+Tab both just toggle between them.
+  test('optInOffWarning_tabFromConfirm_movesFocusToCancel', async () => {
+    const { window } = await openOptInOffWarning();
+    const cancelBtn = window.document.getElementById('opt-in-warning-cancel');
+    const confirmBtn = window.document.getElementById('opt-in-warning-confirm');
+    confirmBtn.focus();
+
+    confirmBtn.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+
+    expect(window.document.activeElement).toBe(cancelBtn);
+  });
+
+  test('optInOffWarning_shiftTabFromCancel_movesFocusToConfirm', async () => {
+    const { window } = await openOptInOffWarning();
+    const cancelBtn = window.document.getElementById('opt-in-warning-cancel');
+    const confirmBtn = window.document.getElementById('opt-in-warning-confirm');
+    cancelBtn.focus();
+
+    cancelBtn.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+
+    expect(window.document.activeElement).toBe(confirmBtn);
+  });
+
   test('optInOffWarning_escapeKey_dismissesLikeCancel', async () => {
     const { window, calls } = await openOptInOffWarning();
 
@@ -491,7 +565,11 @@ describe('properties.js - scoped sync toast sequence (#35 Task 7)', () => {
     expect([...window.document.querySelectorAll('.toast-success')].some(t => /synced/i.test(t.textContent))).toBe(false);
   });
 
-  test('scopedSyncRejectedBecauseAnotherSyncIsRunning_showsAnErrorToast', async () => {
+  // PR #37 review finding m3: the save already succeeded before the
+  // scoped sync was even requested - the toast must make clear that the
+  // SETTING was saved and only the push to the external calendar is
+  // deferred, not that the Save itself failed.
+  test('scopedSyncRejectedBecauseAnotherSyncIsRunning_showsAnErrorToastClarifyingTheSettingWasSaved', async () => {
     const { window } = await saveWithOptInToggledOn(
       { method: 'POST', url: '/api/properties/1/sync', ok: false, status: 429, body: { message: 'Sync already in progress' } }
     );
@@ -499,6 +577,8 @@ describe('properties.js - scoped sync toast sequence (#35 Task 7)', () => {
 
     const errorToast = [...window.document.querySelectorAll('.toast-error')].find(t => /already in progress/i.test(t.textContent));
     expect(errorToast).toBeDefined();
+    expect(errorToast.textContent).toMatch(/saved/i);
+    expect(errorToast.textContent).toMatch(/next sync/i);
   });
 });
 

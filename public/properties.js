@@ -383,18 +383,24 @@ function buildPropertyAccordion(p) {
 function buildOptInSwitches(idPrefix, optedInIds) {
   const flagged = _binTypes.filter(bt => bt.requires_opt_in);
   if (flagged.length === 0) return '';
+  // PR #37 review finding m8: a <fieldset>/<legend> gives the group of
+  // switches a real accessible name for assistive tech - a bare <label>
+  // above the group is only ever associated with one element, never a
+  // whole group of checkboxes.
   return `
         <div class="form-group">
-          <label>Opt-in collections</label>
-          <div class="opt-in-switches">
-            ${flagged.map(bt => `
-            <label class="checkbox-label">
-              <input type="checkbox" id="${idPrefix}-${bt.id}" data-bin-type-id="${bt.id}" ${optedInIds.includes(bt.id) ? 'checked' : ''}>
-              <span class="bin-type-colour-dot" style="background:${escAttr(bt.colour)}"></span>
-              ${escHtml(bt.label)}
-            </label>`).join('')}
-          </div>
-          <p style="font-size:12px;color:var(--text-3);margin-top:4px">These are opt-in collections &mdash; switch one on only if this property is enrolled with the council for it. Enabled collections sync to your calendar immediately; the rest stay hidden.</p>
+          <fieldset class="opt-in-fieldset">
+            <legend>Opt-in collections</legend>
+            <div class="opt-in-switches">
+              ${flagged.map(bt => `
+              <label class="checkbox-label">
+                <input type="checkbox" id="${idPrefix}-${bt.id}" data-bin-type-id="${bt.id}" ${optedInIds.includes(bt.id) ? 'checked' : ''}>
+                <span class="bin-type-colour-dot" style="background:${escAttr(bt.colour)}"></span>
+                ${escHtml(bt.label)}
+              </label>`).join('')}
+            </div>
+            <p style="font-size:12px;color:var(--text-3);margin-top:4px">These are opt-in collections &mdash; switch one on only if this property is enrolled with the council for it. Enabled collections sync to your calendar immediately; the rest stay hidden.</p>
+          </fieldset>
         </div>`;
 }
 
@@ -511,7 +517,13 @@ async function triggerScopedSync(id, label) {
       showToast(`Sync finished with an unexpected status for ${label}`, 'error');
     }
   } catch (err) {
-    showToast(err.message === 'HTTP 429' ? `A sync is already in progress — try ${label} again shortly.` : err.message, 'error');
+    // PR #37 review finding m3: by this point the PUT has already
+    // succeeded - only the push to the external calendar is deferred, not
+    // the save itself. Say so explicitly rather than reading like the
+    // settings change failed.
+    showToast(err.message === 'HTTP 429'
+      ? `${label} saved — a sync is already in progress, so this change will take effect on the next sync.`
+      : err.message, 'error');
   }
 }
 
@@ -527,6 +539,13 @@ async function triggerScopedSync(id, label) {
 // number of bin types turned off in one save - turnedOff names every one
 // of them, in both the title (when there's exactly one) and the body.
 function showOptInOffWarning(id, label, ics_url, turnedOff, newIds) {
+  // PR #37 review finding m8: restores focus to wherever it was before
+  // the modal opened (realistically the Save button) once it closes -
+  // without this, a keyboard user was left stranded on <body>. Only
+  // meaningful on the Cancel path: Confirm's own renderPropertyAccordions()
+  // immediately replaces this element anyway, so a stale reference there
+  // is harmless (.focus() on a detached node is a no-op).
+  const previouslyFocused = document.activeElement;
   const checkboxes = turnedOff.map(bt => document.getElementById(`prop-opt-in-${id}-${bt.id}`));
   const labels = turnedOff.map(bt => escHtml(bt.label));
   const title = turnedOff.length === 1
@@ -549,13 +568,24 @@ function showOptInOffWarning(id, label, ics_url, turnedOff, newIds) {
     </div>`;
   document.body.appendChild(overlay);
 
+  const cancelBtn = document.getElementById('opt-in-warning-cancel');
+  const confirmBtn = document.getElementById('opt-in-warning-confirm');
+
   function onKeydown(e) {
-    if (e.key === 'Escape') cancel();
+    if (e.key === 'Escape') { cancel(); return; }
+    // PR #37 review finding m8: a focus trap - Tab must never escape into
+    // the page behind the overlay. With exactly two focusable elements,
+    // Tab and Shift+Tab both just toggle between them.
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      (document.activeElement === cancelBtn ? confirmBtn : cancelBtn).focus();
+    }
   }
 
   function closeModal() {
     document.removeEventListener('keydown', onKeydown);
     overlay.remove();
+    if (previouslyFocused?.isConnected) previouslyFocused.focus();
   }
 
   function cancel() {
@@ -563,9 +593,8 @@ function showOptInOffWarning(id, label, ics_url, turnedOff, newIds) {
     closeModal();
   }
 
-  const cancelBtn = document.getElementById('opt-in-warning-cancel');
   cancelBtn.onclick = cancel;
-  document.getElementById('opt-in-warning-confirm').onclick = async () => {
+  confirmBtn.onclick = async () => {
     closeModal();
     await performPropertySave(id, label, ics_url, newIds, true);
   };

@@ -682,6 +682,26 @@ input[type="checkbox"] {
   margin-bottom: 4px;
 }
 
+/* PR #37 review finding m8: resets the browser's default fieldset/legend
+   chrome (border, padding, min-width) so it matches the plain <label>
+   look used everywhere else in this form, while still giving the group
+   a real accessible name. */
+.opt-in-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.opt-in-fieldset legend {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  margin-bottom: 6px;
+  padding: 0;
+}
+
 .form-error {
   color: var(--danger);
   font-size: 12px;
