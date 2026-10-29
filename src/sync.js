@@ -39,13 +39,17 @@ async function runSync() {
       return { status: 200, message: 'Skipped — no properties configured' };
     }
 
-    // PR #34 review finding S2: bin_types is global, not per-property, so
-    // querying it once per property inside syncProperty (the previous
-    // approach) was wasteful - queried once here and passed down instead.
-    const gardenMatchers = db.prepare('SELECT summary_match FROM bin_types WHERE is_garden_waste = 1')
-      .all().map(r => r.summary_match);
+    // #35: generalized from "bin_types is global, not per-property" (PR
+    // #34 review finding S2) to cover the new per-property opt-in table
+    // too - both are global, not per-property, so both are queried exactly
+    // once per run regardless of how many properties are synced. The
+    // per-property withheld-matcher list is computed purely in memory from
+    // these two results inside syncProperty - no per-property SQL query.
+    const flaggedBinTypes = db.prepare('SELECT id, summary_match FROM bin_types WHERE requires_opt_in = 1').all();
+    const optInRows = db.prepare('SELECT property_id, bin_type_id FROM property_bin_type_opt_ins').all();
+    const optInSet = new Set(optInRows.map(r => `${r.property_id}:${r.bin_type_id}`));
 
-    const results = await Promise.all(properties.map(p => syncProperty(db, runId, p, gardenMatchers)));
+    const results = await Promise.all(properties.map(p => syncProperty(db, runId, p, flaggedBinTypes, optInSet)));
 
     const failed = results.filter(r => r.error);
     const succeeded = results.filter(r => !r.error);
@@ -85,7 +89,7 @@ function currentRemoteSummary(property, identifier) {
   return property.calendar_type === 'google' ? identifier.summary : icloud.extractSummary(identifier.data);
 }
 
-async function syncProperty(db, runId, property, gardenMatchers) {
+async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
   const startedAt = new Date().toISOString();
   if (!property.ics_url) {
     const msg = 'No ICS URL configured — update the property with a calendar URL from the council website';
@@ -134,19 +138,30 @@ async function syncProperty(db, runId, property, gardenMatchers) {
       existingByUid = await icloud.listEventObjects(property, timeMin, timeMax);
     }
 
+    // #35: the summary_match of every flagged bin type this property has
+    // NOT opted into - computed purely in memory from the two once-per-run
+    // queries, no per-property SQL.
+    const withheldMatchers = flaggedBinTypes
+      .filter(bt => !optInSet.has(`${property.id}:${bt.id}`))
+      .map(bt => bt.summary_match);
+    // ALL flagged bin types, opt-in state aside - whether an event
+    // contains any flagged segment at all is independent of what this
+    // property currently has withheld. This is what lets a fully
+    // opted-in property still detect and restore a combined-day event
+    // whose remote copy was stripped during a PRIOR opted-out period:
+    // withheldMatchers is empty for such a property, so stripping alone
+    // can't tell "nothing to touch" apart from "already correct, or
+    // needs restoring" - this flag is what makes that distinction.
+    const allFlaggedMatchers = flaggedBinTypes.map(bt => bt.summary_match);
+
     let added = 0, skipped = 0, deleted = 0, updated = 0;
     for (const event of events) {
-      const strippedSummary = stripMatchingSegments(event.summary, gardenMatchers);
-      const isGarden = matchesAnySegment(event.summary, gardenMatchers);
-      const isPureGardenWaste = isGarden && strippedSummary === '';
-      // A combined day whose garden-waste segment, once removed, still
-      // leaves something behind (e.g. "Garden waste and general
-      // waste+food (...)" -> "general waste+food (...)") - distinct from
-      // pure garden waste (stripped to nothing) and from an ordinary
-      // non-garden event (stripping changes nothing).
-      const isCombinedWithGardenWaste = isGarden && strippedSummary !== '' && strippedSummary !== event.summary;
+      const targetSummary = stripMatchingSegments(event.summary, withheldMatchers);
+      const touchesAnyFlaggedType = matchesAnySegment(event.summary, allFlaggedMatchers);
+      // Every segment withheld - nothing left to push at all.
+      const isFullyWithheld = targetSummary === '';
 
-      if (!property.garden_waste_opted_in && isPureGardenWaste) {
+      if (isFullyWithheld) {
         if (existingByUid.has(event.uid)) {
           const identifier = existingByUid.get(event.uid);
           // PR #34 review finding m2: only count a CONFIRMED deletion -
@@ -160,17 +175,17 @@ async function syncProperty(db, runId, property, gardenMatchers) {
         continue;
       }
 
-      // PR #34 review finding M1 (new, full /pr-reviewer re-audit): handled
-      // the same way regardless of opt-in state - opted-out targets the
-      // stripped summary, opted-in targets the full original summary. This
-      // is what lets re-opting IN restore a combined day's full summary on
-      // the external calendar: previously only the opted-out direction
-      // compared against a target before writing, so the opted-in direction
-      // fell through to the generic "uid exists -> skip" branch below and a
-      // summary stripped during a prior opted-out period was never
-      // corrected back.
-      if (isCombinedWithGardenWaste) {
-        const targetSummary = property.garden_waste_opted_in ? event.summary : strippedSummary;
+      // #35: covers BOTH directions under one check now - a combined day
+      // that needs stripping (some but not all segments withheld) AND a
+      // fully-opted-in event whose remote copy might still be stale from
+      // a prior opted-out period (targetSummary === event.summary here,
+      // but the REMOTE text might not be - only the compare-before-write
+      // check below can tell). PR #34 review finding M1's opted-in/
+      // opted-out ternary collapses into targetSummary itself: opted into
+      // everything relevant -> targetSummary is the untouched original;
+      // opted into some but not all -> targetSummary has only the
+      // withheld segment(s) removed.
+      if (touchesAnyFlaggedType) {
         const eventToWrite = { ...event, summary: targetSummary };
         if (existingByUid.has(event.uid)) {
           const identifier = existingByUid.get(event.uid);
@@ -219,9 +234,11 @@ async function syncProperty(db, runId, property, gardenMatchers) {
     // the external calendar - the loop above only ever inserts/updates
     // events that ARE in the feed, so a uid with nothing left to overwrite
     // it just sat there indefinitely as a stale, no-longer-valid uplift.
-    // Disjoint from the Garden Waste delete branch above, which only ever
+    // Disjoint from the withheld-delete branch above, which only ever
     // considers a uid that IS still in the feed - every uid reaching this
-    // loop is, by construction, absent from `events`.
+    // loop is, by construction, absent from `events`. #35: preserved
+    // unmodified - bin-type-agnostic by construction, it never consults
+    // withheldMatchers at all.
     const feedUids = new Set(events.map(e => e.uid));
     for (const [uid, identifier] of existingByUid) {
       if (feedUids.has(uid)) continue;

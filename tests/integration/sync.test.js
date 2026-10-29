@@ -440,18 +440,22 @@ describe('sync', () => {
     expect(statusRun).toBeDefined();
   });
 
-  // --- #33 Task 5: gate push / reconcile deletions on garden_waste_opted_in ---
+  // --- #35 Task 5: gate push / reconcile deletions on per-property, per-bin-type opt-in ---
+  // (test names below still say "gardenWaste" - the fixture scenarios are
+  // unchanged, only the underlying opt-in mechanism generalized; see the
+  // new withheldMatchers-based tests further down for the genuinely new
+  // multi-bin-type behaviour this task adds.)
 
   test('runSync_gardenWasteOptedOut_doesNotPushPureGardenWasteEvent', async () => {
     const property = {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -472,11 +476,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -498,11 +502,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -529,11 +533,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -562,11 +566,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 1,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -588,11 +592,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-grey', summary: 'Grey Bin',
@@ -613,11 +617,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -648,11 +652,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -683,11 +687,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -712,11 +716,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -750,11 +754,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -786,11 +790,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -816,11 +820,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -849,11 +853,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -878,20 +882,30 @@ describe('sync', () => {
   // querying it once per property inside the sync loop was wasteful - this
   // locks in that it's now queried exactly once per sync run regardless of
   // how many properties are synced.
-  test('runSync_withMultipleProperties_queriesGardenMatchersExactlyOnce', async () => {
+  // #35: generalized from "bin_types is global, not per-property" (PR #34
+  // review finding S2) to cover the new opt-in rows table too - both are
+  // global, not per-property, so both are queried exactly once per run
+  // regardless of how many properties are synced, with the per-property
+  // withheld-matcher list computed purely in memory from the two results.
+  test('runSync_withMultipleProperties_queriesFlaggedBinTypesAndOptInRowsExactlyOnce', async () => {
     const properties = [
-      { id: 1, label: 'Home', ics_url: 'https://a.example/cal.ics', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc1', garden_waste_opted_in: 0 },
-      { id: 2, label: 'Flat', ics_url: 'https://b.example/cal.ics', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc2', garden_waste_opted_in: 0 },
+      { id: 1, label: 'Home', ics_url: 'https://a.example/cal.ics', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc1' },
+      { id: 2, label: 'Flat', ics_url: 'https://b.example/cal.ics', calendar_type: 'google', calendar_id: 'primary', credentials: 'enc2' },
     ];
     mockPrepareReturn.all
       .mockReturnValueOnce(properties)
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({ events: [], warnings: [] });
 
     await runSync();
 
-    const matcherQueryCalls = mockDb.prepare.mock.calls.filter(c => c[0].includes('bin_types') && c[0].includes('is_garden_waste'));
+    const matcherQueryCalls = mockDb.prepare.mock.calls.filter(c => c[0].includes('bin_types') && c[0].includes('requires_opt_in'));
     expect(matcherQueryCalls).toHaveLength(1);
+    const optInQueryCalls = mockDb.prepare.mock.calls.filter(
+      c => c[0].includes('SELECT') && c[0].includes('property_bin_type_opt_ins')
+    );
+    expect(optInQueryCalls).toHaveLength(1);
   });
 
   // PR #34 review finding M1 (new, full /pr-reviewer re-audit): opting a
@@ -906,11 +920,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 1,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -938,11 +952,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
-      garden_waste_opted_in: 1,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -975,11 +989,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 1,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -1006,11 +1020,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -1035,11 +1049,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 1,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -1066,11 +1080,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({ events: [], warnings: [] });
 
     await runSync();
@@ -1085,11 +1099,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 1,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-combined', summary: COMBINED_SUMMARY,
@@ -1120,7 +1134,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1152,7 +1165,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1177,7 +1189,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1211,7 +1222,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1246,11 +1256,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-still-here', summary: 'Grey Bin',
@@ -1275,7 +1285,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1313,7 +1322,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1340,7 +1348,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1364,7 +1371,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1388,7 +1394,6 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
@@ -1416,11 +1421,11 @@ describe('sync', () => {
       id: 1, label: 'Home', uprn: '12345',
       ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
       calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
-      garden_waste_opted_in: 0,
     };
     mockPrepareReturn.all
       .mockReturnValueOnce([property])
-      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([]);
     fetchIcs.mockResolvedValue({
       events: [{
         uid: 'evt-garden', summary: 'Garden waste',
@@ -1447,5 +1452,135 @@ describe('sync', () => {
     const runCalls = mockPrepareReturn.run.mock.calls;
     const resultRunCall = runCalls.find(args => args.length === 8 && args[1] === 1);
     expect(resultRunCall[4]).toBe(2); // both deletions counted
+  });
+
+  // --- #35 Task 5: generalized multi-bin-type withholding ---
+  // Genuinely new behaviour this task adds, beyond generalizing the
+  // single Garden Waste case above: TWO different bin types can be
+  // flagged opt-in-required at once, and a property can be opted into
+  // one but not the other - independently, within the same combined
+  // summary.
+
+  const MULTI_TYPE_COMBINED_SUMMARY = 'Garden waste and Bulky waste and general waste+food (+food only after transition week)';
+
+  test('runSync_optedIntoOneFlaggedBinTypeButNotAnother_stripsOnlyTheWithheldSegmentFromAMultiTypeCombinedSummary', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      // Two flagged bin types: Garden (id 1) and Bulky (id 2).
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }, { id: 2, summary_match: 'Bulky' }])
+      // Opted into Garden (id 1) only - Bulky (id 2) remains withheld.
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-multi', summary: MULTI_TYPE_COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]); // not yet pushed
+
+    await runSync();
+
+    expect(google.insertEvent).toHaveBeenCalledWith(
+      property,
+      expect.objectContaining({
+        uid: 'evt-multi',
+        // Garden segment kept (opted in), Bulky segment removed (withheld).
+        summary: 'Garden waste and general waste+food (+food only after transition week)',
+      })
+    );
+  });
+
+  test('runSync_optedIntoNeitherOfTwoFlaggedBinTypes_stripsBothWithheldSegments', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }, { id: 2, summary_match: 'Bulky' }])
+      .mockReturnValueOnce([]); // opted into neither
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-multi', summary: MULTI_TYPE_COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    expect(google.insertEvent).toHaveBeenCalledWith(
+      property,
+      expect.objectContaining({
+        uid: 'evt-multi',
+        summary: 'general waste+food (+food only after transition week)',
+      })
+    );
+  });
+
+  test('runSync_optedIntoBothOfTwoFlaggedBinTypes_pushesTheFullCombinedSummaryUnchanged', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }, { id: 2, summary_match: 'Bulky' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }, { property_id: 1, bin_type_id: 2 }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-multi', summary: MULTI_TYPE_COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    expect(google.insertEvent).toHaveBeenCalledWith(
+      property,
+      expect.objectContaining({ uid: 'evt-multi', summary: MULTI_TYPE_COMBINED_SUMMARY })
+    );
+  });
+
+  // Non-flagged bin types (requires_opt_in = 0) are never withheld or
+  // deleted under any opt-in state - there's no opt-in row for them to
+  // begin with, and they never appear in the flaggedBinTypes list at all.
+  test('runSync_nonFlaggedBinType_isNeverWithheldOrDeletedRegardlessOfOptInState', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }]) // 'Grey' is never flagged
+      .mockReturnValueOnce([]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-grey', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-grey', id: 'google-id-grey' }]);
+
+    await runSync();
+
+    expect(google.deleteEvent).not.toHaveBeenCalled();
   });
 });
