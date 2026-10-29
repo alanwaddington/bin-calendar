@@ -70,6 +70,47 @@ describe('icloud', () => {
     );
   });
 
+  // PR #37 review suggestion S1: RFC 5545 content lines SHOULD be folded
+  // at or before 75 octets. buildVCalendarString previously emitted
+  // SUMMARY: with no folding at all - the real East Ayrshire combined
+  // summary comfortably exceeds the limit once SUMMARY: is counted in,
+  // and extractSummary's single-line regex can't see past a fold a
+  // CalDAV server applies on storage. If the server folds and this code
+  // doesn't unfold before parsing, the compare-before-write check in
+  // sync.js would never find a match, rewriting the event every run.
+  test('insertEvent_withASummaryLongerThan75Octets_foldsTheSummaryLineAndEveryPhysicalLineStaysWithinTheLimit', async () => {
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const longSummary = 'Garden waste and general waste+food (+food only after transition week) at 123 Example Street';
+    const event = {
+      uid: 'evt-long', summary: longSummary,
+      start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'), description: '',
+    };
+
+    await insertEvent(property, event);
+
+    const call = DAVClient.mock.results[DAVClient.mock.results.length - 1].value.createCalendarObject.mock.calls[0][0];
+    // Folded: at least one CRLF + single leading space/tab continuation
+    // appears, and every resulting PHYSICAL line (including the fold
+    // marker itself) is within the 75-octet limit.
+    expect(call.iCalString).toMatch(/\r\n[ \t]/);
+    for (const physicalLine of call.iCalString.split('\r\n')) {
+      expect(Buffer.byteLength(physicalLine, 'utf8')).toBeLessThanOrEqual(75);
+    }
+  });
+
+  test('insertEvent_withAShortSummary_doesNotFoldAnything', async () => {
+    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+    const event = {
+      uid: 'evt-short', summary: 'Blue Bin',
+      start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'), description: '',
+    };
+
+    await insertEvent(property, event);
+
+    const call = DAVClient.mock.results[DAVClient.mock.results.length - 1].value.createCalendarObject.mock.calls[0][0];
+    expect(call.iCalString).not.toMatch(/\r\n[ \t]/);
+  });
+
   test('insertEvent_includesDescriptionWhenPresent', async () => {
     const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
     const event = {
@@ -248,6 +289,33 @@ describe('icloud', () => {
 
     test('extractSummary_undefinedData_returnsNull', () => {
       expect(extractSummary(undefined)).toBeNull();
+    });
+
+    // PR #37 review suggestion S1: a server-folded SUMMARY line (CRLF +
+    // a single leading space before the continuation) must be unfolded
+    // before the single-line regex runs, or a folded line's continuation
+    // (everything after the fold) would be silently lost.
+    test('extractSummary_withAFoldedSummaryLine_unfoldsAndReturnsTheFullText', () => {
+      const data = 'BEGIN:VEVENT\r\nUID:x\r\nSUMMARY:Garden waste and general waste+food (+food \r\n only after transition week)\r\nEND:VEVENT';
+
+      expect(extractSummary(data)).toBe('Garden waste and general waste+food (+food only after transition week)');
+    });
+
+    // Round-trips what buildVCalendarString actually produces for a long
+    // summary, rather than a hand-folded fixture - proves fold-on-write
+    // and unfold-on-read genuinely agree with each other.
+    test('extractSummary_roundTripsTheExactTextThatInsertEventFolded', async () => {
+      const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
+      const longSummary = 'Garden waste and general waste+food (+food only after transition week) at 123 Example Street';
+      const event = {
+        uid: 'evt-roundtrip', summary: longSummary,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'), description: '',
+      };
+
+      await insertEvent(property, event);
+
+      const call = DAVClient.mock.results[DAVClient.mock.results.length - 1].value.createCalendarObject.mock.calls[0][0];
+      expect(extractSummary(call.iCalString)).toBe(longSummary);
     });
   });
 });
