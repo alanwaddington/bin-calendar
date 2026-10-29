@@ -64,9 +64,18 @@ function renderLogResult(r) {
   const deletedPart = r.events_deleted
     ? `, <span style="color:var(--warning);font-weight:600">deleted: ${r.events_deleted}</span>`
     : '';
+  // PR #34 review finding m1 (new, full /pr-reviewer re-audit): a combined-
+  // day summary rewrite (opt-out strip, or opt-in restore) is a correction
+  // to an event that already exists externally, not an addition - shown
+  // only when non-zero, same pattern as deleted above, but in the neutral
+  // text colour (not var(--warning)) since it's a benign in-place text fix,
+  // not a destructive action.
+  const updatedPart = r.events_updated
+    ? `, updated: ${r.events_updated}`
+    : '';
   return `<div class="log-result">
     <strong style="color:var(--text)">${label}</strong>
-    <span style="color:var(--text-3)">&nbsp;&mdash;&nbsp;</span>added: ${r.events_added}, skipped: ${r.events_skipped}${deletedPart}${dur}
+    <span style="color:var(--text-3)">&nbsp;&mdash;&nbsp;</span>added: ${r.events_added}, skipped: ${r.events_skipped}${updatedPart}${deletedPart}${dur}
     ${r.error ? `<span style="color:var(--danger)"> &mdash; ${escLogHtml(r.error)}</span>` : ''}
   </div>`;
 }

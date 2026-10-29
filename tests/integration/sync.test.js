@@ -548,7 +548,7 @@ describe('sync', () => {
     await runSync();
 
     const runCalls = mockPrepareReturn.run.mock.calls;
-    const resultRunCall = runCalls.find(args => args.length === 7 && args[2] === 0 && args[3] === 0);
+    const resultRunCall = runCalls.find(args => args.length === 8 && args[2] === 0 && args[3] === 0);
     expect(resultRunCall[4]).toBe(0); // deleted count stays 0, not 1
   });
 
@@ -635,7 +635,7 @@ describe('sync', () => {
     expect(resultInsertCall).toMatch(/events_deleted/);
 
     const runCalls = mockPrepareReturn.run.mock.calls;
-    const resultRunCall = runCalls.find(args => args.length === 7 && args[2] === 0 && args[3] === 0 && args[4] === 1);
+    const resultRunCall = runCalls.find(args => args.length === 8 && args[2] === 0 && args[3] === 0 && args[4] === 1);
     expect(resultRunCall).toBeDefined();
   });
 
@@ -892,6 +892,192 @@ describe('sync', () => {
 
     const matcherQueryCalls = mockDb.prepare.mock.calls.filter(c => c[0].includes('bin_types') && c[0].includes('is_garden_waste'));
     expect(matcherQueryCalls).toHaveLength(1);
+  });
+
+  // PR #34 review finding M1 (new, full /pr-reviewer re-audit): opting a
+  // property back IN must restore a combined-day event's full original
+  // summary on the external calendar - previously the opted-in path had
+  // no equivalent to the opted-out path's "compare before writing" check,
+  // so it fell through to the generic "uid already exists -> skip" branch
+  // and the stale stripped text (from a prior opted-out period) was never
+  // corrected.
+  test('runSync_gardenWasteOptedIn_alreadyPushedCombinedDayEventStillHasStrippedSummaryOnGoogle_restoresOriginalSummary', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 1,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-combined', summary: COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    // Remote still carries the STRIPPED summary from the prior opted-out
+    // period - never deleted, just rewritten, so its uid is still present.
+    google.listEvents.mockResolvedValue([{
+      iCalUID: 'evt-combined', id: 'google-event-id-1',
+      summary: 'general waste+food (+food only after transition week)',
+    }]);
+
+    await runSync();
+
+    expect(google.updateEventSummary).toHaveBeenCalledWith(property, 'google-event-id-1', COMBINED_SUMMARY);
+    expect(google.insertEvent).not.toHaveBeenCalled();
+    expect(google.deleteEvent).not.toHaveBeenCalled();
+  });
+
+  test('runSync_gardenWasteOptedIn_alreadyPushedCombinedDayEventStillHasStrippedSummaryOnIcloud_restoresOriginalSummary', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'icloud', calendar_id: 'https://caldav.icloud.com/123', credentials: 'encrypted',
+      garden_waste_opted_in: 1,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-combined', summary: COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    const davObject = {
+      url: 'https://caldav.icloud.com/123/evt-combined.ics', etag: '"e1"',
+      data: 'BEGIN:VEVENT\r\nUID:evt-combined\r\nSUMMARY:general waste+food (+food only after transition week)\r\nEND:VEVENT',
+    };
+    icloud.listEventObjects.mockResolvedValue(new Map([['evt-combined', davObject]]));
+
+    await runSync();
+
+    expect(icloud.updateEvent).toHaveBeenCalledWith(
+      property, davObject, expect.objectContaining({ uid: 'evt-combined', summary: COMBINED_SUMMARY })
+    );
+    expect(icloud.insertEvent).not.toHaveBeenCalled();
+    expect(icloud.deleteEvent).not.toHaveBeenCalled();
+  });
+
+  // Once already restored (by a prior sync, or because it was never
+  // stripped in the first place), re-opted-in must not keep re-writing the
+  // event identically on every run - mirrors the opted-out "already
+  // updated" guard.
+  test('runSync_gardenWasteOptedIn_combinedDayAlreadyHasOriginalSummary_doesNotReWriteAgain', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 1,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-combined', summary: COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-combined', id: 'google-event-id-1', summary: COMBINED_SUMMARY }]);
+
+    await runSync();
+
+    expect(google.updateEventSummary).not.toHaveBeenCalled();
+    expect(google.insertEvent).not.toHaveBeenCalled();
+  });
+
+  // PR #34 review finding m1 (new, full /pr-reviewer re-audit): a genuine
+  // combined-day summary rewrite (either direction - opt-out strip or
+  // opt-in restore) is not an addition, it's a correction to an event that
+  // already exists externally - must be counted via events_updated, not
+  // events_added, so the audit trail in sync_results/Logs isn't misleading.
+  test('runSync_gardenWasteOptedOut_combinedDayRewrite_isCountedAsEventsUpdatedNotEventsAdded', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-combined', summary: COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{ iCalUID: 'evt-combined', id: 'google-event-id-1', summary: COMBINED_SUMMARY }]);
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    // [runId, propertyId, added, skipped, deleted, updated, error, startedAt]
+    const resultRunCall = runCalls.find(args => args.length === 8 && args[1] === 1);
+    expect(resultRunCall[2]).toBe(0); // added stays 0
+    expect(resultRunCall[5]).toBe(1); // updated is 1
+  });
+
+  test('runSync_gardenWasteOptedIn_combinedDayRestore_isCountedAsEventsUpdatedNotEventsAdded', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 1,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-combined', summary: COMBINED_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([{
+      iCalUID: 'evt-combined', id: 'google-event-id-1',
+      summary: 'general waste+food (+food only after transition week)',
+    }]);
+
+    await runSync();
+
+    const runCalls = mockPrepareReturn.run.mock.calls;
+    const resultRunCall = runCalls.find(args => args.length === 8 && args[1] === 1);
+    expect(resultRunCall[2]).toBe(0); // added stays 0
+    expect(resultRunCall[5]).toBe(1); // updated is 1
+  });
+
+  test('runSync_recordsUpdatedCountInSyncResults_includesEventsUpdatedColumnInInsertSql', async () => {
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+      garden_waste_opted_in: 0,
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ summary_match: 'Garden' }]);
+    fetchIcs.mockResolvedValue({ events: [], warnings: [] });
+
+    await runSync();
+
+    const calls = mockDb.prepare.mock.calls.map(c => c[0]);
+    const resultInsertCall = calls.find(q => q.includes('INSERT INTO sync_results'));
+    expect(resultInsertCall).toMatch(/events_updated/);
   });
 
   test('runSync_gardenWasteOptedIn_combinedDayEvent_pushesWithOriginalSummaryUnchanged', async () => {

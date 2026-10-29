@@ -122,7 +122,7 @@ async function syncProperty(db, runId, property, gardenMatchers) {
       existingByUid = await icloud.listEventObjects(property, timeMin, timeMax);
     }
 
-    let added = 0, skipped = 0, deleted = 0;
+    let added = 0, skipped = 0, deleted = 0, updated = 0;
     for (const event of events) {
       const strippedSummary = stripGardenWasteSegments(event.summary, gardenMatchers);
       const isGarden = isGardenWaste(event.summary, gardenMatchers);
@@ -148,14 +148,24 @@ async function syncProperty(db, runId, property, gardenMatchers) {
         continue;
       }
 
-      if (!property.garden_waste_opted_in && isCombinedWithGardenWaste) {
-        const strippedEvent = { ...event, summary: strippedSummary };
+      // PR #34 review finding M1 (new, full /pr-reviewer re-audit): handled
+      // the same way regardless of opt-in state - opted-out targets the
+      // stripped summary, opted-in targets the full original summary. This
+      // is what lets re-opting IN restore a combined day's full summary on
+      // the external calendar: previously only the opted-out direction
+      // compared against a target before writing, so the opted-in direction
+      // fell through to the generic "uid exists -> skip" branch below and a
+      // summary stripped during a prior opted-out period was never
+      // corrected back.
+      if (isCombinedWithGardenWaste) {
+        const targetSummary = property.garden_waste_opted_in ? event.summary : strippedSummary;
+        const eventToWrite = { ...event, summary: targetSummary };
         if (existingByUid.has(event.uid)) {
           const identifier = existingByUid.get(event.uid);
-          if (currentRemoteSummary(property, identifier) === strippedSummary) {
-            // PR #34 review finding M2: already up to date from a prior
-            // sync - rewriting it again would be a no-op write that only
-            // bumps the event's etag/sequence on the user's own devices.
+          if (currentRemoteSummary(property, identifier) === targetSummary) {
+            // PR #34 review finding M2: already correct from a prior sync -
+            // rewriting it again would be a no-op write that only bumps the
+            // event's etag/sequence on the user's own devices.
             skipped++;
           } else {
             // PR #34 review finding M1: rewritten in place for BOTH
@@ -165,15 +175,18 @@ async function syncProperty(db, runId, property, gardenMatchers) {
             // Only a CONFIRMED update is counted; a failed one leaves the
             // event stale for this run, to be retried on the next sync.
             const ok = property.calendar_type === 'icloud'
-              ? await icloud.updateEvent(property, identifier, strippedEvent)
-              : await google.updateEventSummary(property, identifier.id, strippedSummary);
-            if (ok) added++;
+              ? await icloud.updateEvent(property, identifier, eventToWrite)
+              : await google.updateEventSummary(property, identifier.id, targetSummary);
+            // PR #34 review finding m1 (new): a rewrite of an event that
+            // already exists externally is a correction, not an addition -
+            // counted separately so the audit trail isn't misleading.
+            if (ok) updated++;
           }
         } else {
           if (property.calendar_type === 'google') {
-            await google.insertEvent(property, strippedEvent);
+            await google.insertEvent(property, eventToWrite);
           } else {
-            await icloud.insertEvent(property, strippedEvent);
+            await icloud.insertEvent(property, eventToWrite);
           }
           added++;
         }
@@ -191,7 +204,7 @@ async function syncProperty(db, runId, property, gardenMatchers) {
 
     updateCredentialStatus(db, property.id, 'ok');
     cacheEvents(db, property.id, events);
-    writeResult(db, runId, property.id, { added, skipped, deleted, error: warnings.join('; ') || null, startedAt });
+    writeResult(db, runId, property.id, { added, skipped, deleted, updated, error: warnings.join('; ') || null, startedAt });
     return { propertyId: property.id };
   } catch (err) {
     if (isAuthError(err)) {
@@ -205,11 +218,11 @@ async function syncProperty(db, runId, property, gardenMatchers) {
 // PR #34 review finding S1: an options object rather than a growing list
 // of positional booleans/numbers - three consecutive 0s made a transposed
 // argument easy to introduce and hard to spot in a diff.
-function writeResult(db, runId, propertyId, { added = 0, skipped = 0, deleted = 0, error = null, startedAt }) {
+function writeResult(db, runId, propertyId, { added = 0, skipped = 0, deleted = 0, updated = 0, error = null, startedAt }) {
   db.prepare(`
-    INSERT INTO sync_results (run_id, property_id, events_added, events_skipped, events_deleted, error, started_at, completed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(runId, propertyId, added, skipped, deleted, error, startedAt);
+    INSERT INTO sync_results (run_id, property_id, events_added, events_skipped, events_deleted, events_updated, error, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(runId, propertyId, added, skipped, deleted, updated, error, startedAt);
 }
 
 function purgeOldRecords(db) {
