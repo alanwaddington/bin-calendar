@@ -1583,4 +1583,87 @@ describe('sync', () => {
 
     expect(google.deleteEvent).not.toHaveBeenCalled();
   });
+
+  // --- #35 Task 6: property-scoped sync - runSync(propertyId) ---
+
+  test('runSync_withPropertyId_usesScopedQueryWithIdFilterAndBindsTheId', async () => {
+    mockPrepareReturn.all.mockReturnValueOnce([]); // no matching property -> skipped path
+
+    await runSync(42);
+
+    const propertiesCall = mockDb.prepare.mock.calls.find(c => c[0].includes('FROM properties') && c[0].includes('credentials'));
+    expect(propertiesCall[0]).toMatch(/AND id = \?/);
+    expect(mockPrepareReturn.all.mock.calls[0]).toEqual([42]);
+  });
+
+  test('runSync_withNoPropertyId_usesTheUnscopedQuery', async () => {
+    await runSync();
+
+    const propertiesCall = mockDb.prepare.mock.calls.find(c => c[0].includes('FROM properties') && c[0].includes('credentials'));
+    expect(propertiesCall[0]).not.toMatch(/AND id = \?/);
+  });
+
+  test('runSync_withPropertyId_onlySyncsThatPropertyNotOthers', async () => {
+    const property = {
+      id: 42, label: 'Home', ics_url: 'https://a.example/cal.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'enc',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]); // the scoped query found only property 42
+    fetchIcs.mockResolvedValue({ events: [], warnings: [] });
+
+    await runSync(42);
+
+    const resultInsertCalls = mockPrepareReturn.run.mock.calls.filter(args => args.length === 8);
+    expect(resultInsertCalls).toHaveLength(1);
+    expect(resultInsertCalls[0][1]).toBe(42); // property_id column
+  });
+
+  // A scoped run writes sync_runs/sync_results identically in shape to a
+  // global run - same lock, same run row, same rollup, same result-row
+  // column count - nothing backend-special-cased for the scoped case.
+  test('runSync_withPropertyId_writesSyncRunsAndResultsInTheSameShapeAsAGlobalRun', async () => {
+    const property = {
+      id: 42, label: 'Home', ics_url: 'https://a.example/cal.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'enc',
+    };
+    mockPrepareReturn.all.mockReturnValueOnce([property]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-1', summary: 'Grey Bin',
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    const result = await runSync(42);
+
+    expect(result.status).toBe(200);
+    expect(result.overallStatus).toBe('success');
+    expect(result.runId).toBeDefined();
+    const runInsertSql = mockDb.prepare.mock.calls.map(c => c[0]).find(q => q.includes("INSERT INTO sync_runs"));
+    expect(runInsertSql).toBeDefined();
+  });
+
+  test('runSync_withPropertyIdWhileAnotherSyncIsRunning_returns429AndStartsNoSecondRun', async () => {
+    mockPrepareReturn.get.mockReturnValue({ id: 1 }); // an existing 'running' sync_runs row
+
+    const result = await runSync(42);
+
+    expect(result.status).toBe(429);
+    expect(result.message).toMatch(/already in progress/i);
+    const runInsertSql = mockDb.prepare.mock.calls.map(c => c[0]).find(q => q.includes('INSERT INTO sync_runs'));
+    expect(runInsertSql).toBeUndefined();
+  });
+
+  test('runSync_withUnknownOrDisconnectedPropertyId_returnsSkippedNot500OrFalseSuccess', async () => {
+    mockPrepareReturn.all.mockReturnValueOnce([]); // scoped query found nothing - unknown id or no credentials/calendar_id
+
+    const result = await runSync(999);
+
+    expect(result.status).toBe(200);
+    expect(result.message).toMatch(/Skipped/i);
+    expect(result.overallStatus).toBeUndefined();
+  });
 });

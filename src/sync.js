@@ -4,7 +4,14 @@ const google = require('./google');
 const icloud = require('./icloud');
 const { matchesAnySegment, stripMatchingSegments } = require('./bin-types');
 
-async function runSync() {
+// #35 Task 6: propertyId scopes a sync run to just that property - the
+// scheduler and the global "Sync Now" button call this with no argument
+// (unchanged), while a property's own opt-in toggle calls it with that
+// property's id. Everything else is inherited as-is: the single-
+// `running`-row lock, the sync_runs row, writeResult's shape, and the
+// success/partial/failed rollup - a scoped run is not a second,
+// differently-shaped calendar-mutation path.
+async function runSync(propertyId = null) {
   const db = getDb();
 
   // Acquire concurrency lock via exclusive transaction
@@ -30,9 +37,18 @@ async function runSync() {
   db.prepare("DELETE FROM events WHERE start_date < date('now')").run();
 
   try {
-    const properties = db.prepare(
-      "SELECT * FROM properties WHERE credentials IS NOT NULL AND calendar_id IS NOT NULL"
-    ).all();
+    // #35: scoped to a single property when propertyId is given. An
+    // unknown id, or one without credentials/calendar_id, returns zero
+    // rows and falls into the same "skipped" branch below as the global
+    // "no properties configured" case - no special-casing needed, and it
+    // can never be reported as a false success.
+    const properties = propertyId
+      ? db.prepare(
+          "SELECT * FROM properties WHERE credentials IS NOT NULL AND calendar_id IS NOT NULL AND id = ?"
+        ).all(propertyId)
+      : db.prepare(
+          "SELECT * FROM properties WHERE credentials IS NOT NULL AND calendar_id IS NOT NULL"
+        ).all();
 
     if (properties.length === 0) {
       updateRun('skipped');

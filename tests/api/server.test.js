@@ -122,6 +122,48 @@ describe('server API', () => {
     expect(res.body.message).toMatch(/already in progress/i);
   });
 
+  // --- #35 Task 6: property-scoped sync endpoint ---
+
+  test('POST /api/properties/:id/sync calls runSync with the property id and returns its result', async () => {
+    runSync.mockResolvedValue({ status: 200, overallStatus: 'success', runId: 1, results: [{ propertyId: '42' }] });
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(runSync).toHaveBeenCalledWith('42');
+    expect(res.status).toBe(200);
+    expect(res.body.overallStatus).toBe('success');
+  });
+
+  test('POST /api/properties/:id/sync returns 429 when a sync is already running', async () => {
+    runSync.mockResolvedValue({ status: 429, message: 'Sync already in progress' });
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(res.status).toBe(429);
+    expect(res.body.message).toMatch(/already in progress/i);
+  });
+
+  // Unknown property id, or one without credentials/calendar_id, is
+  // exactly the existing "Skipped - no properties configured" shape -
+  // never a misleading success, never a 500.
+  test('POST /api/properties/:id/sync with an unknown or disconnected property returns the skipped shape, not a false success', async () => {
+    runSync.mockResolvedValue({ status: 200, message: 'Skipped — no properties configured' });
+
+    const res = await request(app).post('/api/properties/999/sync');
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/Skipped/i);
+    expect(res.body.overallStatus).toBeUndefined();
+  });
+
+  test('POST /api/properties/:id/sync returns 500 when runSync throws', async () => {
+    runSync.mockRejectedValue(new Error('Database locked'));
+
+    const res = await request(app).post('/api/properties/42/sync');
+
+    expect(res.status).toBe(500);
+  });
+
   test('GET /api/sync/runs returns 200 with runs and results', async () => {
     const res = await request(app).get('/api/sync/runs');
 

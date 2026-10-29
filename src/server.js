@@ -444,6 +444,22 @@ app.post('/api/sync', async (req, res) => {
   }
 });
 
+// #35 Task 6: scoped to a single property - runSync(propertyId) inherits
+// the lock, the sync_runs row, and the success/partial/failed/skipped
+// rollup unchanged, so this mirrors POST /api/sync exactly, just passing
+// the id through. An unknown id, or one without credentials/calendar_id,
+// naturally falls into the existing "Skipped — no properties configured"
+// shape - never a misleading success, never a 500.
+app.post('/api/properties/:id/sync', async (req, res) => {
+  try {
+    const result = await runSync(req.params.id);
+    res.status(result.status).json(result);
+  } catch (err) {
+    console.error('Scoped sync error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/sync/runs', (req, res) => {
   const db = getDb();
   const runs = db.prepare(
