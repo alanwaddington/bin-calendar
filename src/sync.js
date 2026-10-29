@@ -2,7 +2,7 @@ const { getDb } = require('./db');
 const { fetchIcs } = require('./ics');
 const google = require('./google');
 const icloud = require('./icloud');
-const { matchesAnySegment, stripMatchingSegments } = require('./bin-types');
+const { matchesAnySegment, stripMatchingSegments, splitSummarySegments } = require('./bin-types');
 
 // #35 Task 6: propertyId scopes a sync run to just that property - the
 // scheduler and the global "Sync Now" button call this with no argument
@@ -192,6 +192,16 @@ async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
     for (const event of events) {
       const targetSummary = stripMatchingSegments(event.summary, withheldMatchers);
       const touchesAnyFlaggedType = matchesAnySegment(event.summary, allFlaggedMatchers);
+      // PR #37 review finding m5: stripMatchingSegments always rejoins
+      // with a canonical ' and ' separator, even when nothing was
+      // actually removed - normalizing an irregular feed separator
+      // ("AND", doubled whitespace) into pushed text that no longer
+      // matches what cacheEvents stores locally for this same event.
+      // Equal segment counts before/after means nothing was stripped (it
+      // only ever removes whole segments, never rewrites one), so the
+      // untouched original is what actually gets pushed in that case.
+      const nothingStripped = splitSummarySegments(targetSummary).length === splitSummarySegments(event.summary).length;
+      const finalSummary = nothingStripped ? event.summary : targetSummary;
       // Every segment withheld - nothing left to push at all. Requires
       // touchesAnyFlaggedType too (PR #37 review finding M1):
       // stripMatchingSegments('   ', []) returns '' for a degenerate
@@ -226,10 +236,10 @@ async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
       // opted into some but not all -> targetSummary has only the
       // withheld segment(s) removed.
       if (touchesAnyFlaggedType) {
-        const eventToWrite = { ...event, summary: targetSummary };
+        const eventToWrite = { ...event, summary: finalSummary };
         if (existingByUid.has(event.uid)) {
           const identifier = existingByUid.get(event.uid);
-          if (currentRemoteSummary(property, identifier) === targetSummary) {
+          if (currentRemoteSummary(property, identifier) === finalSummary) {
             // PR #34 review finding M2: already correct from a prior sync -
             // rewriting it again would be a no-op write that only bumps the
             // event's etag/sequence on the user's own devices.
@@ -243,7 +253,7 @@ async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
             // event stale for this run, to be retried on the next sync.
             const ok = property.calendar_type === 'icloud'
               ? await icloud.updateEvent(property, identifier, eventToWrite)
-              : await google.updateEventSummary(property, identifier.id, targetSummary);
+              : await google.updateEventSummary(property, identifier.id, finalSummary);
             // PR #34 review finding m1 (new): a rewrite of an event that
             // already exists externally is a correction, not an addition -
             // counted separately so the audit trail isn't misleading.

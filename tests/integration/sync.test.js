@@ -1191,6 +1191,43 @@ describe('sync', () => {
     );
   });
 
+  // PR #37 review finding m5: stripMatchingSegments always rejoins with a
+  // canonical ' and ' separator, so even when NOTHING was withheld (this
+  // property is opted into every flagged type touched here), an event
+  // using an irregular separator ("AND", doubled whitespace) would be
+  // pushed to the external calendar in rewritten, normalized form - while
+  // cacheEvents stores the untouched original locally, leaving the real
+  // calendar and the app's own view of the same event showing different
+  // text. Nothing stripped must mean the original text is pushed verbatim.
+  test('runSync_gardenWasteOptedIn_summaryWithIrregularAndSeparator_pushesTheOriginalTextUnchanged', async () => {
+    const IRREGULAR_SUMMARY = 'Garden waste  AND  general waste+food';
+    const property = {
+      id: 1, label: 'Home', uprn: '12345',
+      ics_url: 'https://recollect-eu.global.ssl.fastly.net/api/places/ABC/services/50014/events.en-GB.ics',
+      calendar_type: 'google', calendar_id: 'primary', credentials: 'encrypted',
+    };
+    mockPrepareReturn.all
+      .mockReturnValueOnce([property])
+      .mockReturnValueOnce([{ id: 1, summary_match: 'Garden' }])
+      .mockReturnValueOnce([{ property_id: 1, bin_type_id: 1 }]);
+    fetchIcs.mockResolvedValue({
+      events: [{
+        uid: 'evt-irregular', summary: IRREGULAR_SUMMARY,
+        start: new Date('2026-04-01T07:00:00Z'), end: new Date('2026-04-01T08:00:00Z'),
+        description: '', allDay: false,
+      }],
+      warnings: [],
+    });
+    google.listEvents.mockResolvedValue([]);
+
+    await runSync();
+
+    expect(google.insertEvent).toHaveBeenCalledWith(
+      property,
+      expect.objectContaining({ uid: 'evt-irregular', summary: IRREGULAR_SUMMARY })
+    );
+  });
+
   // --- Bug report: stale events (no longer in the feed at all) were never
   // removed from the external calendar, leaving invalid uplifts behind.
   // Distinct from the Garden Waste delete path above: that one targets an
