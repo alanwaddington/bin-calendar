@@ -1,9 +1,13 @@
 # PR #34 Review — Garden Waste opt-in per property (#33)
 
-**Date:** 2026-10-28
+**Date:** 2026-10-29
 **Author:** alanwaddington
-**Branch:** `feature/33-garden-waste-opt-in` → `main`
+**Branch:** feature/33-garden-waste-opt-in → main
 **State:** Open
+
+> This is a **full, updated** review superseding the review committed earlier on this branch (`9e120f8f`). It re-audits every changed file against the current HEAD (`1a375b4`), after all nine prior review-finding fix commits (C1, M1, M2, m1, m2, m3, m4, m5, S1, S2, S3) have landed.
+>
+> **Post-review update (2026-10-29):** per the user's instruction to fix every finding regardless of severity, **M1 (new)** and **m1 (new)** below are now fixed (commit `b8651ec`) and re-verified — see the `outcome` notes inline. **S1 (new)** was deliberately skipped per the user's own decision, since it's a refactor this same report recommended deferring until #35's generalization work begins (extracting an abstraction before that design exists risks the wrong shape).
 
 ---
 
@@ -11,23 +15,20 @@
 
 | Item | Result |
 |------|--------|
-| Overall Assessment | **Fail ❌** — one Critical finding (unbounded calendar deletion) must be fixed before merge |
-| Risk Level | **High** — the feature's core new capability is irreversible deletion from the user's real external calendar |
-| Test Coverage | Adequate overall (97.18% stmts / 91.79% branch, well above the 80% gate); two specific gaps identified |
-| Acceptance Criteria | 12 Met / 1 Partially Met (13 total) |
-| Lint | 0 errors / 0 warnings (0 in diff, 0 pre-existing) |
+| Overall Assessment | Pass ✅ (all findings from this pass resolved or deliberately deferred) |
+| Risk Level | Low (was Medium — M1 (new) was the only Major) |
+| Test Coverage | Adequate (97.44% stmts / 92.38% branch overall after the fix; 100% on every file this PR touches except `server.js` and `sync.js`, both >95%, uncovered lines are pre-existing/unrelated to #33) |
+| Acceptance Criteria | 13 / 13 Met (all 13 formal criteria from #33's Analysis) |
+| Lint | 0 errors / 0 warnings |
 
-The feature is well-architected, cleanly decomposed across 7 commits, and the display-layer and UI halves are solid and independently verified against a running instance. The blocking problem is that the PR wires user-editable `bin_types.summary_match` values into a destructive deletion path without hardening an input-validation flaw that was previously only cosmetic.
+**Headline change since the last review pass:** all 9 previously-raised findings (1 Critical, 3 Major, 5 Minor, 3 Suggestion) are fixed and verified in code and tests. This pass found **one new Major finding**: a property that opts back **in** to Garden Waste after opting out did not have a combined-day event's full summary restored on its external calendar — it stayed silently stuck with the garden-waste segment missing. See **M1 (new)** below — **now fixed**.
 
 ---
 
 ## Issues Reviewed
 
 ### Issue Hierarchy
-
-Flat — no parent, no sub-issues (confirmed via GraphQL `subIssues`).
-
-- [#33 — Add per-property opt-in for Garden Waste collection](https://github.com/alanwaddington/bin-calendar/issues/33) (root; contains both `## Analysis` and `## Design` sections, 13 Analysis acceptance criteria + 7 per-task Design criteria sets)
+- #33 — Add per-property opt-in for Garden Waste collection (root; contains both the Analysis and Design sections inline — confirmed via GitHub's sub-issues API that #33 has no parent and no sub-issues, so this is the complete hierarchy)
 
 ---
 
@@ -37,304 +38,213 @@ Flat — no parent, no sub-issues (confirmed via GraphQL `subIssues`).
 
 | Property | Detail |
 |----------|--------|
-| Purpose | Adds `properties.garden_waste_opted_in` and `bin_types.is_garden_waste`, both `INTEGER NOT NULL DEFAULT 0` |
+| Purpose | Adds `properties.garden_waste_opted_in` and `bin_types.is_garden_waste`, both `NOT NULL DEFAULT 0` |
 | Issues | #33 |
-| Criteria covered | AC2, AC3 |
-| Quality | ✅ Additive-only, append-only, matches project migration conventions. Default 0 satisfies "existing properties opted-out with no backfill" |
-| Test coverage | `tests/unit/db.test.js:initDb_migration006_addsGardenWasteOptedInToProperties`, `…_addsIsGardenWasteToBinTypes` |
+| Criteria covered | AC2, AC3 (default opted-out for new and existing properties) |
+| Quality | ✅ No issues — additive only, consistent with CLAUDE.md's "never modify existing migration files" |
+| Test coverage | `tests/unit/db.test.js: initDb_migration006_addsGardenWasteOptedInToProperties`, `initDb_migration006_addsIsGardenWasteToBinTypes` |
 
 ### `src/migrations/007.sql` (+4 / -0)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | Adds `sync_results.events_deleted` so a reconciling run is auditable |
-| Issues | #33 (Design Task 5 AC) |
-| Criteria covered | Design Task 5 — "deleted counts recorded in `sync_results`" |
-| Quality | ✅ Additive. Note: this file was **not** in the Design's Task 5 file list; adding it was a justified deviation (the AC demands it) and is called out in the commit message |
-| Test coverage | `tests/unit/db.test.js:initDb_migration007_addsEventsDeletedToSyncResults` |
+| Purpose | Adds `sync_results.events_deleted INTEGER NOT NULL DEFAULT 0` |
+| Issues | #33 Task 5 |
+| Criteria covered | "Deleted counts are recorded in sync_results so a run is auditable" |
+| Quality | ✅ No issues |
+| Test coverage | `tests/unit/db.test.js: initDb_migration007_addsEventsDeletedToSyncResults` |
 
-### `src/bin-types.js` (+57 / -0, new)
-
-| Property | Detail |
-|----------|--------|
-| Purpose | Shared matching primitives extracted from `server.js` (`stripParentheticals`, `matchesOutsideParentheses`, `splitSummarySegments`) plus new `isGardenWaste()` / `stripGardenWasteSegments()` |
-| Issues | #33 (Design Task 2) |
-| Criteria covered | Underpins AC5–AC10, AC12 |
-| Quality | ⚠️ **See C1.** `matchesOutsideParentheses(summary, '')` returns `true` for every input (`String.includes('')`), so a single blank matcher makes every event classify as Garden Waste. No guard against blank/whitespace matchers. Otherwise excellent: pure functions, no I/O, 100% covered, and the `isGarden &&` guard in `sync.js` correctly prevents the `' and '` re-join from normalising whitespace on non-garden summaries |
-| Test coverage | `tests/unit/bin-types.test.js` — 16 tests, 100% stmts/branch/funcs/lines. **No test covers an empty or whitespace-only matcher** |
-
-### `src/server.js` (+50 / -43)
+### `src/migrations/008.sql` (+5 / -0, new — added as part of the m1 (new) fix)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | Imports primitives from `bin-types.js` instead of defining them; adds `toBoolInt()`; plumbs both flags through `GET`/`POST`/`PUT /api/properties` and `sanitiseBinTypeInput` + bin-types `POST`/`PUT`; adds `excludeOptedOutGardenWaste()` and applies it in `getPropertyEventsRows` and `/api/next-collection` |
-| Issues | #33 (Design Tasks 1, 2, 3) |
-| Criteria covered | AC1, AC2, AC5, AC6, AC7, AC12 |
-| Quality | ⚠️ **See C1** — `sanitiseBinTypeInput` validates `!summary_match` *before* `.replace(/[%_]/g, '')`, so a Match of `"%"` passes validation and is persisted as `""`. Otherwise strong: `toBoolInt` correctly handles the `"false"` string footgun; `excludeOptedOutGardenWaste` runs *before* the nearest-date selection in `next-collection` (the subtle ordering the AC demands); strict `=== 1`/`=== 0` correctly leaves `NULL` (unmatched LEFT JOIN) rows alone; all queries parameterised |
-| Test coverage | `tests/api/server.test.js` (+187) — endpoint round-trips, defaulting, `"false"` coercion, SQL-shape assertions, next-collection filtering incl. nearest-date interaction |
+| Purpose | Adds `sync_results.events_updated INTEGER NOT NULL DEFAULT 0` |
+| Issues | PR #34 review finding m1 (new) |
+| Criteria covered | m1 (new)'s recommendation, implemented |
+| Quality | ✅ No issues — additive only, follows the same pattern as 006/007 |
+| Test coverage | `tests/unit/db.test.js: initDb_migration008_addsEventsUpdatedToSyncResults`; also manually round-tripped against a real migrated DB (not mocked) to confirm the 9-param `INSERT` binds correctly |
 
-### `src/sync.js` (+74 / -13)
+### `src/bin-types.js` (+68 / -0, new)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | Loads garden matchers, classifies in-memory feed events as pure-garden / combined / non-garden, gates push, reconciles deletions, strips combined-day summaries, records `deleted` count |
-| Issues | #33 (Design Tasks 5, 6) |
+| Purpose | Shared matching primitives moved out of `server.js`, plus new `isGardenWaste()`/`stripGardenWasteSegments()` so `sync.js` and `server.js` share one definition of "matches" |
+| Issues | #33 Task 2, PR #34 review finding C1 |
+| Criteria covered | Design Decision 1 (shared module); C1's `matchesOutsideParentheses` blank-guard |
+| Quality | ✅ No issues. `matchesOutsideParentheses('', matchText)` early-return is good defense in depth, independently verified against the raw app at `/verify` time. |
+| Test coverage | `tests/unit/bin-types.test.js` — 100% stmt/branch/func/line coverage, includes the blank-matcher regression case |
+
+### `src/server.js` (+57 / -43)
+
+| Property | Detail |
+|----------|--------|
+| Purpose | Imports primitives from `bin-types.js`; adds `is_garden_waste`/`garden_waste_opted_in` to both display queries + `excludeOptedOutGardenWaste()` filter; accepts/returns the flags on `properties` and `bin-types` endpoints; `sanitiseBinTypeInput` rejects a Match that strips to nothing (C1 fix) |
+| Issues | #33 Tasks 1, 3; PR #34 review finding C1 |
+| Criteria covered | AC1, AC2, AC5, AC6, AC7, AC12, AC13 |
+| Quality | ✅ No new issues. `excludeOptedOutGardenWaste()` runs before the nearest-date selection in `/api/next-collection` (line 440, before line 456), which is exactly what AC7 requires and is independently verified at runtime (see **Runtime verification** below). |
+| Test coverage | `tests/api/server.test.js`, `tests/unit/calendar-events.test.js` — extensive, including the nearest-date-advance and combined-day cases |
+
+### `src/sync.js` (+98 / -15)
+
+| Property | Detail |
+|----------|--------|
+| Purpose | Classifies feed events via the shared primitives; gates push on `garden_waste_opted_in`; deletes already-pushed pure-garden-waste events on opt-out; strips/rewrites combined-day summaries in **either direction** (opt-out strip, opt-in restore — M1 (new) fix); records `events_deleted`/`events_updated`; queries `bin_types` once per run (S2 fix); `writeResult` takes an options object (S1 fix) |
+| Issues | #33 Tasks 5, 6; PR #34 review findings M1, M2, S1, S2, M1 (new), m1 (new) |
 | Criteria covered | AC4, AC8, AC9, AC10, AC12, AC13 |
-| Quality | ⚠️ **See C1, M2, m1, m2.** Decision 2 is correctly implemented — classification runs on the in-memory `events` array (full feed range), not the 6-month cache, and `cacheEvents` is untouched. Deletion is correctly scoped to UIDs that are both (a) from this property's own feed and (b) pure garden waste. But: the iCloud combined-day `updateEvent` fires on **every** sync with no comparison against current remote state; it is counted as `added`; and `deleted++` increments even when the underlying delete silently failed |
-| Test coverage | `tests/integration/sync.test.js` (+331) — 11 new tests across both providers, both opt-in states, combined-day paths. ⚠️ Line 157 (iCloud combined-day **first** push) uncovered |
+| Quality | ✅ Fixed. The combined-day branch (now a single unified block, no longer split by opt-in direction) compares the remote summary against whichever text it *should* currently have — `event.summary` when opted in, `strippedSummary` when opted out — and rewrites only on a mismatch, regardless of which direction the property last transitioned. A genuine rewrite is now counted via the new `events_updated` counter instead of `events_added`. |
+| Test coverage | `tests/integration/sync.test.js` (1070+ lines) — now includes the opt-out→sync→opt-in→sync restoration case for both providers, the "already restored, don't re-write" guard, and explicit `events_updated` vs `events_added` count assertions for both directions |
 
-### `src/google.js` (+17 / -1)
-
-| Property | Detail |
-|----------|--------|
-| Purpose | New `deleteEvent(property, googleEventId)` via `calendar.events.delete` |
-| Issues | #33 (Design Task 4) |
-| Criteria covered | AC10 |
-| Quality | ✅ Good separation: only the delete call is wrapped in try/catch, so auth failures still propagate to `syncProperty`'s `isAuthError` handling. ⚠️ See **m5** — `listEvents` (which feeds `existingByUid`) remains unpaginated with Google's default 250-result cap, which this PR newly makes a *correctness* concern for deletion |
-| Test coverage | `tests/integration/google.test.js` — `deleteEvent_callsCalendarEventsDeleteWithCalendarIdAndEventId`, `deleteEvent_whenApiCallRejects_doesNotThrow` |
-
-### `src/icloud.js` (+50 / -10)
+### `src/google.js` (+69 / -8)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | New `listEventObjects()` (Map<uid, davObject> preserving url/etag), `updateEvent()` via `updateCalendarObject`, `deleteEvent()` via `deleteCalendarObject`; `buildVCalendarString()` extracted; `listEventUids()` re-expressed in terms of `listEventObjects()` |
-| Issues | #33 (Design Tasks 4, 6) |
-| Criteria covered | AC10, AC12 |
-| Quality | ⚠️ See **m1** — `deleteEvent` swallows errors but `updateEvent` does not, so a transient CalDAV failure on the combined-day update aborts the whole property's sync. The `listEventUids` re-expression is clean and preserves existing caller behaviour exactly |
-| Test coverage | `tests/integration/icloud.test.js` (+81) — listEventObjects/url+etag preservation, listEventUids regression, deleteEvent args + rejection handling, updateEvent args. ⚠️ `icloud.js:38` (`if (match)` false branch) uncovered |
+| Purpose | New `deleteEvent()`, `updateEventSummary()`; `listEvents()` now paginates via `nextPageToken` (m5 fix) |
+| Issues | #33 Task 4; PR #34 review findings M1, m2, m5 |
+| Criteria covered | Design's delete-capability requirement; M1 (Google combined-day rewrite); m5 (pagination correctness for deletion) |
+| Quality | ✅ No issues. Error boundaries correctly scoped to just the mutating call (matches `deleteEvent`'s established pattern), confirmed in my own review of the auth-propagation behaviour. |
+| Test coverage | `tests/integration/google.test.js` — 100% on all four metrics; explicit pagination test with two pages |
 
-### `public/properties.js` (+78 / -6)
+### `src/icloud.js` (+81 / -10)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | Garden Waste checkbox + PAID ADD-ON badge on property add/edit forms; `performPropertySave()` extracted; `showGardenWasteOffWarning()` modal; `is_garden_waste` column/checkbox on bin types; both flags plumbed into the API calls |
-| Issues | #33 (Design Task 7) |
+| Purpose | New `deleteEvent()`, `updateEvent()`, `listEventObjects()` (preserving `url`/`etag`), `extractSummary()`; `updateEvent` now has error handling (m1 fix) |
+| Issues | #33 Task 4, Task 6; PR #34 review findings m1, m2, m3 |
+| Criteria covered | Design's delete-capability requirement; combined-day in-place rewrite |
+| Quality | ✅ No issues. |
+| Test coverage | `tests/integration/icloud.test.js` — 100% on all four metrics, including the no-parseable-UID branch (m3 fix) |
+
+### `public/properties.js` (+123 / -6)
+
+| Property | Detail |
+|----------|--------|
+| Purpose | Opt-in checkbox on property add/edit forms with "PAID ADD-ON" badge; off-switch warning modal with full ARIA/keyboard/focus support (m4 fix); `is_garden_waste` checkbox on Bin Types rows with hint text and inert-state warning banner (S3 fix) |
+| Issues | #33 Task 7; PR #34 review findings m4, S3 |
 | Criteria covered | AC1, AC11 |
-| Quality | ✅ No new XSS surface — all new markup is static or boolean-driven; no user data interpolated into the new HTML. Existing `escHtml`/`escAttr` reused, not duplicated. The opted-in→opted-out detection correctly reads the *last loaded* `_settingsProperties` value rather than trusting the DOM. ⚠️ See **m4** (modal a11y) |
-| Test coverage | `tests/unit/properties-frontend.test.js` (+209, new) — 9 tests covering render, defaults, persistence, modal appearance, cancel-restores-and-saves-nothing, confirm-saves-false, bin-type flag round-trips |
+| Quality | ✅ No issues. `escHtml`/`escAttr` used consistently for all user-supplied data (labels, colours, match text); static copy ("PAID ADD-ON", hint sentences) needs no escaping. Modal's Escape listener is correctly scoped and removed on every close path (cancel, confirm, Escape, backdrop) — verified live, no leak across repeated open/close cycles. |
+| Test coverage | `tests/unit/properties-frontend.test.js` (392 lines) — thorough, including a11y attributes, focus management, and listener-leak-after-confirm |
+
+### `public/logs.js` (+14 / -1)
+
+| Property | Detail |
+|----------|--------|
+| Purpose | Renders `deleted: N` only when non-zero, styled in `var(--warning)` (M3 fix); renders `updated: N` only when non-zero, in neutral text colour (m1 (new) fix) |
+| Issues | PR #34 review findings M3, m1 (new) |
+| Criteria covered | "Deleted counts recorded so a run is auditable" — now also *visible*; same for a genuine combined-day rewrite, distinguished from an addition |
+| Quality | ✅ No issues. `escLogHtml` used for the property label; numeric fields need no escaping. `updated` deliberately not styled in `--warning` like `deleted` — it's a benign in-place text correction, not a destructive action, so distinguishing it visually from `deleted` matters. |
+| Test coverage | `tests/unit/logs-frontend.test.js` — covers non-zero, zero, and missing-column cases for both `deleted` and `updated`, plus both shown together |
 
 ### `public/style.css` (+33 / -0)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | `input[type="checkbox"]` reset (the global `input` rule would otherwise stretch it full-width), `.checkbox-label`, `.badge-paid` modifier, `.modal-body`, `.modal-actions` |
-| Issues | #33 (Design Task 7) |
-| Criteria covered | AC1, AC11 |
-| Quality | ✅ Extends the existing `.badge-*` family rather than inventing a parallel component; uses existing design tokens throughout; activates the previously-dead `.modal-overlay`/`.modal`/`.modal-title` block instead of duplicating it |
-| Test coverage | n/a (CSS) — visual behaviour confirmed by live browser verification |
+| Purpose | `.badge-paid`, checkbox/`.checkbox-label` styling, `.modal-body`/`.modal-actions` |
+| Issues | #33 Task 7 |
+| Criteria covered | Visual support for AC1, AC11 |
+| Quality | ✅ No issues — purely additive, no existing rules touched |
+| Test coverage | N/A (visual) — manually verified in a real browser session per the PR description, and independently re-verified by me via headless Chromium screenshots at `/verify` time |
 
-### `tests/helpers/browserDom.js` (+50 / -1)
-
-| Property | Detail |
-|----------|--------|
-| Purpose | New `createSettingsWindow()` and `mockRouterFetch()` (method-aware, body-capturing); forces `window.CONFIG` after evaluating `app.js` |
-| Issues | #33 (Design Task 7 testing) |
-| Quality | ✅ The `window.CONFIG` bridge is correctly a *test-harness* fix, not a production change — `app.js` declares `let CONFIG`, which never becomes a global-object property and so is invisible across jsdom's separate `window.eval()` calls, unlike a real browser where all `<script>` tags share one global scope. `properties.js` is the first file to read `CONFIG`, which is why this never surfaced before. Well-commented |
-| Test coverage | Exercised by the new frontend test file |
-
-### `tests/helpers/testDb.js` (+9 / -2)
+### `tests/helpers/browserDom.js` (+72 / -1), `tests/helpers/testDb.js` (+9 / -2)
 
 | Property | Detail |
 |----------|--------|
-| Purpose | Reads all migration files dynamically instead of a hardcoded `['001','002','003']` list |
-| Issues | #33 (incidental fix) |
-| Quality | ✅ Genuine latent-bug fix — the helper had already silently fallen behind 004/005 before this PR. Now mirrors `db.js`'s own logic |
-| Test coverage | Implicitly exercised by every real-DB test file |
+| Purpose | `createSettingsWindow`/`createLogsWindow`/`mockRouterFetch` for method-aware fetch mocking; `createTestDb` now reads the migrations directory dynamically instead of a hardcoded `['001','002','003']` list (fixes a real gap — it had already silently fallen behind 004/005) |
+| Issues | #33 Task 7 |
+| Criteria covered | Test infrastructure only |
+| Quality | ✅ No issues — the `testDb.js` fix is a good catch independent of #33's own scope |
+| Test coverage | N/A (test infra) |
 
-### Test files (`tests/api/server.test.js` +187, `tests/integration/sync.test.js` +331, `tests/integration/google.test.js` +28, `tests/integration/icloud.test.js` +81, `tests/unit/bin-types.test.js` +90, `tests/unit/calendar-events.test.js` +65, `tests/unit/db.test.js` +33, `tests/unit/properties-frontend.test.js` +209)
+### Test files
 
-| Property | Detail |
-|----------|--------|
-| Purpose | 56 new tests across migration, API, display-filtering, provider, sync-orchestration and frontend layers |
-| Quality | ✅ Consistently follow the project's `MethodName_Scenario_ExpectedResult` convention and Arrange-Act-Assert. Comments explain *why* each case exists, often citing the real feed data behind it. All external deps mocked. ⚠️ Gaps noted in **m3**; no test exercises a blank matcher (**C1**) |
+`tests/api/server.test.js` (+229), `tests/integration/sync.test.js` (+495), `tests/integration/google.test.js` (+124/-1), `tests/integration/icloud.test.js` (+168/-1), `tests/unit/bin-types.test.js` (+131, new), `tests/unit/calendar-events.test.js` (+65), `tests/unit/db.test.js` (+33), `tests/unit/logs-frontend.test.js` (+71, new), `tests/unit/properties-frontend.test.js` (+392, new)
+
+All read in full. Naming follows the project's `MethodName_Scenario_ExpectedResult` convention consistently. Arrange-Act-Assert structure throughout. `jest.mock()` calls are hoisted to the top of every file. No test hits a real external API — Google/iCloud SDKs are fully mocked.
 
 ---
 
 ## Acceptance Criteria Verification
 
-### #33 — Analysis section (13 criteria)
+### #33 — Add per-property opt-in for Garden Waste collection
 
 | # | Criterion | Implementation | Test | Verdict |
 |---|-----------|----------------|------|---------|
-| 1 | Property add/edit form has a Garden Waste opt-in control, clearly labelled as a paid add-on, defaulting to off | `public/properties.js:327-335` (edit), `:600-608` (add); `public/style.css` `.badge-paid` | `properties-frontend.test.js:buildAddPropertyAccordion_rendersUncheckedGardenWasteControlLabelledAsPaidAddOn`, `buildPropertyAccordion_optedInProperty_rendersCheckedGardenWasteControl` | ✅ Met |
-| 2 | New properties are created opted-out by default | `src/server.js:56-64` (`toBoolInt(undefined) → 0`) | `server.test.js:POST /api/properties without garden_waste_opted_in defaults to 0` | ✅ Met |
-| 3 | Existing properties opted-out by default after migration (no manual fix-up) | `src/migrations/006.sql:6` (`NOT NULL DEFAULT 0`) | `db.test.js:initDb_migration006_addsGardenWasteOptedInToProperties` | ✅ Met |
-| 4 | Garden Waste event present in local `events` cache regardless of opt-in status | `src/sync.js:174` — `cacheEvents` called unconditionally with the full `events` array | `sync.test.js:runSync_gardenWasteOptedOut_stillCachesTheGardenWasteEventDespiteNotPushingIt` | ✅ Met |
-| 5 | `GET /api/properties/:id/events` excludes Garden Waste rows for an opted-out property | `src/server.js:240-250` + `excludeOptedOutGardenWaste` | `calendar-events.test.js:getPropertyEventsRows_gardenWasteOptedOut_excludesGardenWasteRow` | ✅ Met (also confirmed live) |
-| 6 | …includes Garden Waste rows for an opted-in property | same | `calendar-events.test.js:…_gardenWasteOptedIn_includesGardenWasteRow` | ✅ Met (also confirmed live) |
-| 7 | `GET /api/next-collection` excludes for opted-out **and** an excluded row must not cause "no collection" when a non-garden collection exists for the nearest date | `src/server.js:406-432` — filter applied before the `expanded[0].date` selection | `server.test.js:getNextCollection_gardenWasteOptedOut_excludesGardenWasteRow`, `…OnCombinedDay_stillShowsTheNonGardenWasteRowForThatDate`, `…IsOnlyRowOnNearestDate_advancesToLaterNonGardenDate` | ✅ Met (also confirmed live) |
-| 8 | A sync run does not push Garden Waste events for an opted-out property | `src/sync.js:122-133` | `sync.test.js:runSync_gardenWasteOptedOut_doesNotPushPureGardenWasteEvent` | ✅ Met (mocked only — see Note A) |
-| 9 | A sync run pushes Garden Waste for an opted-in property, including events withheld during a prior opted-out period | `src/sync.js:164-170` (falls through to the existing uid diff) | `sync.test.js:runSync_gardenWasteOptedIn_pushesGardenWasteEventNotYetPresentExternally` | ✅ Met (see Note B) |
-| 10 | Opted-in → opted-out: a subsequent sync deletes previously-pushed Garden Waste events | `src/sync.js:123-131`; `google.js:102-110`; `icloud.js:93-101` | `sync.test.js:…_deletesAlreadyPushedGardenWasteEventOnGoogle` / `…OnIcloud`; provider-level tests in `google.test.js` / `icloud.test.js` | ✅ Met (mocked only — see Note A) |
-| 11 | Switching opt-in on→off warns the user before the change is saved | `public/properties.js:383-396` (`savePropertyEdit` gate), `:417-447` (`showGardenWasteOffWarning`) | `properties-frontend.test.js:savePropertyEdit_turningGardenWasteOff_showsWarningModalAndDoesNotSaveYet`, `gardenWasteOffWarning_cancel_reChecksTheBoxAndNeverSaves`, `…_confirm_savesWithGardenWasteOptedInFalse` | ✅ Met (also confirmed live) |
-| 12 | On a combined day, an opted-out property still sees/receives the non-Garden-Waste portion | Display: `src/server.js` fan-out + row filter. Push: `src/sync.js:135-162` | `calendar-events.test.js:…OnCombinedDay_stillReturnsTheNonGardenWasteHalf`; `sync.test.js:…newCombinedDayEvent_pushesWithGardenWasteSegmentStripped`, `…alreadyPushedCombinedDayEventOnIcloud_updatesInPlaceWithStrippedSummary` | ✅ Met — with the documented Google limitation (**M1**) |
-| 13 | Every non-Garden-Waste collection type's display and sync behaviour is unchanged (regression check) | Full suite green; live verification | 326 tests pass; `tests/unit/attribute-summary-segment.test.js` and `calendar-events.test.js` pass unmodified as the Task 2 refactor proof | ⚠️ **Partially Met** — holds for all valid configurations, but **C1** shows a reachable configuration in which *every* non-garden event is silently withheld from push and deleted externally |
+| 1 | Property add/edit form has a Garden Waste opt-in control, labelled as a paid add-on, defaulting to off | `public/properties.js:332-338,681-687` | `properties-frontend.test.js: buildAddPropertyAccordion_rendersUncheckedGardenWasteControlLabelledAsPaidAddOn` | ✅ Met |
+| 2 | New properties are created opted-out by default | `src/server.js:57-65` (`toBoolInt`) | `server.test.js: POST /api/properties without garden_waste_opted_in defaults to 0` | ✅ Met |
+| 3 | Existing properties are opted-out by default after the migration runs | `src/migrations/006.sql` | `db.test.js: initDb_migration006_addsGardenWasteOptedInToProperties` | ✅ Met |
+| 4 | A Garden Waste event is present in the local `events` cache regardless of opt-in status | `src/sync.js:193` (`cacheEvents` runs unconditionally) | `sync.test.js: runSync_gardenWasteOptedOut_stillCachesTheGardenWasteEventDespiteNotPushingIt` | ✅ Met |
+| 5 | `GET /api/properties/:id/events` excludes Garden Waste rows for an opted-out property | `src/server.js:188-190,260` (`excludeOptedOutGardenWaste`) | `calendar-events.test.js: getPropertyEventsRows_gardenWasteOptedOut_excludesGardenWasteRow` | ✅ Met |
+| 6 | `GET /api/properties/:id/events` includes Garden Waste rows for an opted-in property | same | `calendar-events.test.js: getPropertyEventsRows_gardenWasteOptedIn_includesGardenWasteRow` | ✅ Met |
+| 7 | `GET /api/next-collection` excludes Garden Waste rows for opted-out, without suppressing a non-Garden collection on the nearest date | `src/server.js:440` (filter runs before line 456's nearest-date selection) | `server.test.js: getNextCollection_gardenWasteOptedOutIsOnlyRowOnNearestDate_advancesToLaterNonGardenDate` | ✅ Met |
+| 8 | A sync run does not push Garden Waste events for an opted-out property | `src/sync.js:137-149` | `sync.test.js: runSync_gardenWasteOptedOut_doesNotPushPureGardenWasteEvent` | ✅ Met |
+| 9 | A sync run pushes Garden Waste events for an opted-in property, including ones withheld during a prior opted-out period | `src/sync.js` (normal uid diff for pure garden-waste; unified combined-day block for the combined case) | `sync.test.js: runSync_gardenWasteOptedIn_pushesGardenWasteEventNotYetPresentExternally`; `runSync_gardenWasteOptedIn_alreadyPushedCombinedDayEventStillHasStrippedSummaryOnGoogle/OnIcloud_restoresOriginalSummary` | ✅ Met *(now also covers the combined-day restoration case — M1 (new) fixed)* |
+| 10 | Opted-in→opted-out transition deletes previously-pushed Garden Waste events on the next sync | `src/sync.js:137-149` | `sync.test.js: runSync_gardenWasteOptedOut_deletesAlreadyPushedGardenWasteEventOnGoogle/OnIcloud` | ✅ Met |
+| 11 | Switching opt-in off shows a confirmation/warning before saving | `public/properties.js:383-392,423-463` | `properties-frontend.test.js: savePropertyEdit_turningGardenWasteOff_showsWarningModalAndDoesNotSaveYet` | ✅ Met |
+| 12 | Combined day: opted-out property still sees/receives the non-Garden-Waste portion | `src/server.js` (display fan-out) + `src/sync.js:151-181` (push strip) | `calendar-events.test.js` + `sync.test.js` combined-day tests | ✅ Met |
+| 13 | Non-Garden-Waste collection types are completely unaffected (regression) | throughout | `calendar-events.test.js: getPropertyEventsRows_nonGardenWasteBinType_unaffectedByOptedOutStatus`; `sync.test.js: runSync_gardenWasteOptedOut_neverDeletesNonGardenWasteEvents` | ✅ Met |
 
-**Note A:** AC8 and AC10 are verified only through mocked integration tests. The sync push/delete path was not exercised against live Google/iCloud APIs (no credentials or outbound access available in the review environment). Given these are the PR's only irreversible operations, a manual smoke test against a throwaway calendar before the first production sync is strongly recommended.
-
-**Note B:** AC9's parenthetical specifies the full `opt out → sync → opt in → sync` sequence. No single test performs that multi-run sequence; it is covered compositionally (the "not pushed while opted out" and "pushed when opted in and absent externally" states are each tested, and the mechanism between them is the pre-existing uid diff). Acceptable, but a single end-to-end transition test would close the gap cheaply.
-
-### #33 — Design section, per-task criteria
-
-| Task | Criteria | Verdict |
-|------|----------|---------|
-| 1 — Migration + API plumbing | Both columns default 0; `GET` returns flag; `POST`/`PUT` accept and persist; omitting on `PUT` preserves; invalid values coerce without 500 | ✅ All met (`server.test.js`, 11 tests) |
-| 2 — Extract primitives | `server.js` behaviour provably unchanged; `isGardenWaste` true for pure + combined, false for the parenthetical caveat; `stripGardenWasteSegments` returns the non-garden half / `''` | ✅ All met; existing suites pass unmodified as the regression proof |
-| 3 — Display filtering | Both endpoints filter; nearest-date ordering preserved; combined day survives; non-garden untouched | ✅ All met, independently confirmed against a running instance |
-| 4 — Provider delete capability | Correct identifiers passed; existing callers unaffected; a rejected delete is handled not thrown | ✅ All met |
-| 5 — Push gating + reconciliation | Not pushed / deleted when opted out; pushed when opted in; classification covers full feed range; cache unaffected; non-garden never deleted; deleted counts recorded | ⚠️ Met in code, but "recorded… so a run is auditable" is only half-delivered — see **M3**. "Non-garden never deleted" is violated under **C1** |
-| 6 — Combined-day stripping | Stripped summary pushed, event not deleted; opted-in unchanged; in-place update rather than delete-and-reinsert, or document the limitation | ✅ Met for iCloud; Google documented as a limitation — but the stated rationale does not hold (**M1**) |
-| 7 — Settings UI | Control on add + edit, labelled, defaults off; persisted; off-switch warning; bin-type flag; existing behaviour unchanged | ✅ All met, confirmed live in a browser |
-
-**Summary: 12/13 Analysis criteria fully met, 1 partially met.**
+**Summary:** 13/13 criteria met, as literally worded. One related Major finding fell outside the literal wording of AC9 but represented a real gap in the same opt-in-reversal behaviour the criterion is checking — now fixed (see M1 (new) below).
 
 ---
 
 ## Findings
 
-### Critical (must fix before merge)
-
-#### C1 — A bin type whose Match is only wildcard characters becomes an empty matcher that classifies every event as Garden Waste, causing mass deletion from the user's external calendar
-
-- **Category:** Reliability / Data loss
-- **Location:** `src/server.js:482-487` (`sanitiseBinTypeInput` — guard at :483, strip at :486), `src/bin-types.js:15-17` (`matchesOutsideParentheses`), consumed destructively at `src/sync.js:112-133`
-- **Description:**
-  `sanitiseBinTypeInput` checks `!summary_match` **before** applying `.replace(/[%_]/g, '')`. A Match of `"%"`, `"_"`, or `"%%"` therefore passes validation and is persisted as an empty string. The codebase explicitly anticipates users typing wildcards — that is the entire reason the strip exists, and there is a dedicated test for it (`postBinType_withSummaryMatchContainingWildcard_stripsWildcards`).
-
-  Before this PR an empty `summary_match` was merely cosmetic: `LIKE '%' || '' || '%'` matched every event, adding a spurious label. **This PR newly routes `summary_match` into a destructive path.** `matchesOutsideParentheses(segment, '')` returns `true` for every input because `String.prototype.includes('')` is always true, so with one blank matcher flagged `is_garden_waste = 1`:
-  - `isGardenWaste(anything) === true`
-  - `stripGardenWasteSegments(anything) === ''` → `isPureGardenWaste === true`
-  - at `sync.js:122-133`, for every opted-out property (**the default state for all properties**): every event is skipped from push, and every event already present externally is passed to `google.deleteEvent` / `icloud.deleteEvent`.
-
-  Reproduced against a running instance:
-  ```
-  POST /api/bin-types {"summary_match":"%","label":"Oops","colour":"#111111","is_garden_waste":true}
-  → {"id":5,"summary_match":"","label":"Oops","colour":"#111111","is_garden_waste":1}
-
-  matchers sync.js would load: [""]
-  "Grey Bin"        -> isGarden: true | stripped: "" | isPureGardenWaste: true
-  "Blue Bin"        -> isGarden: true | stripped: "" | isPureGardenWaste: true
-  "Trolley+food"    -> isGarden: true | stripped: "" | isPureGardenWaste: true
-  "Transition week" -> isGarden: true | stripped: "" | isPureGardenWaste: true
-  ```
-  The shipped Add Bin Type form (`public/properties.js:981-989`) sends the Match field verbatim after `.trim()` and carries the Garden Waste checkbox in the same form, so this is reachable in a single user action through the UI this PR introduces. The display layer happens to be resilient (its per-bin-type fan-out means only the blank-matcher row is dropped), which makes the failure **silent** — the app's own Calendar page looks completely normal while the user's real Google/iCloud calendar is being emptied.
-
-- **Recommendation:** Three independent guards, ideally all of them:
-  1. `sanitiseBinTypeInput` — strip first, then validate, and reject an empty result:
-     ```js
-     const cleaned = String(summary_match ?? '').replace(/[%_]/g, '').trim();
-     if (!cleaned) return { error: 'Invalid match text: must contain at least one non-wildcard character' };
-     ```
-  2. `src/bin-types.js` — make the primitive safe: `matchesOutsideParentheses` returns `false` when `matchText` is empty/blank, and/or `isGardenWaste`/`stripGardenWasteSegments` apply `matchers.filter(m => m && m.trim())`.
-  3. Add regression tests: an empty/whitespace matcher must classify nothing as garden waste, and `POST`/`PUT /api/bin-types` with `summary_match: "%"` must return 400.
-
-  Guard 2 is the most important of the three, because it protects the destructive path regardless of how a blank value reached the table (existing rows, direct DB writes, future endpoints).
-
----
-
 ### Major (should fix)
 
-#### M1 — The Google combined-day limitation is justified by a premise that does not hold; `events.patch` by ID is available and the ID is already in hand
+#### M1 (new) — Re-opting in does not restore a combined-day event's full summary on the external calendar
 
-- **Category:** Code Quality / Correctness
-- **Location:** `src/sync.js:138-152`
-- **Description:** The comment justifies skipping in-place rewrite on Google because "events.import has no documented behaviour for re-importing an existing iCalUID". That is true of `events.import`, but it is not the only option. `existingByUid` for Google is built at `sync.js:105` as `Map<iCalUID, e.id>` — i.e. **the Google event ID is already loaded**, precisely so `deleteEvent` can use it. `calendar.events.patch({ calendarId, eventId, requestBody: { summary } })` is a fully documented, idempotent, ID-addressed update, and `googleapis` exposes it on the same resource as the `delete` this PR already added. The consequence of the current choice: an opted-out Google property that was previously opted in keeps "Garden waste and general waste+food (…)" visible on the user's real calendar indefinitely, which is the thing the feature exists to prevent.
-- **Recommendation:** Add `google.updateEventSummary(property, eventId, summary)` wrapping `calendar.events.patch`, and call it in the `isCombinedWithGardenWaste` + already-present branch for Google, mirroring the iCloud path. If the team prefers to defer, correct the comment to say the limitation is a deliberate scope decision rather than an API constraint, so it is not carried forward as received wisdom.
-
-#### M2 — The iCloud combined-day update re-writes the remote event on every sync and is miscounted as "added"
-
-- **Category:** Reliability / Performance
-- **Location:** `src/sync.js:147-149`
-- **Description:** For an opted-out iCloud property with a combined-day event, `isCombinedWithGardenWaste` is true on **every** run and the uid is always present in `existingByUid`, so `icloud.updateEvent` fires every sync — with no comparison against the summary already stored remotely. The event has in fact been correct since the first run. Each redundant `PUT` bumps the object's etag/sequence on iCloud, which can cause the user's devices to re-surface the event as "updated". It also increments `added`, so `sync_results` reports `events_added: 1` in perpetuity for a property where nothing was actually added — degrading exactly the audit trail Task 5 set out to establish.
-- **Recommendation:** Compare before writing — `listEventObjects` already returns each object's raw `data`, so the current `SUMMARY:` line can be parsed and the update skipped when it already equals `strippedSummary` (counting it as `skipped` instead). Alternatively introduce a distinct `updated` counter rather than overloading `added`.
-
-#### M3 — `events_deleted` is persisted but never surfaced, so the destructive operation is invisible in the UI
-
-- **Category:** Reliability / Observability
-- **Location:** `public/logs.js:56`
-- **Description:** Design Task 5's criterion is "deleted counts are recorded in `sync_results` **so a run is auditable**". The column is written (`sync.js:186-190`) and is already returned to the client — `/api/sync/runs` selects `sr.*` — but the Logs page renders only `added: ${r.events_added}, skipped: ${r.events_skipped}`. A user whose calendar events were deleted has no way to see that it happened. Given deletion is the only irreversible action in the app, and the Analysis flagged the first post-deploy sync as a high rollout risk, this is the one place the user would look to confirm what the sync did.
-- **Recommendation:** One-line change in `public/logs.js:56` to render `deleted: ${r.events_deleted}` (ideally only when non-zero, or styled to stand out when it is). Add a case to `tests/unit/logs-frontend.test.js` if one exists, or to the dashboard/logs frontend test pattern.
-
----
+- **Outcome:** ✅ Fixed (commit `b8651ec`)
+- **Category:** Reliability / Correctness
+- **Location:** `src/sync.js` (was lines 183-189; the combined-day branch is now unified, see below)
+- **Description:** When a property opts out, a combined-day event (e.g. `"Garden waste and general waste+food (...)"`) is correctly rewritten in place with its garden segment stripped (`src/sync.js:151-181`, via `google.updateEventSummary`/`icloud.updateEvent`). But when that property later opts back **in**, the loop's opted-in branch had no equivalent check — `isCombinedWithGardenWaste` was only consulted inside the `!property.garden_waste_opted_in` guard, so for an opted-in property execution fell straight through to the generic diff: `if (existingByUid.has(event.uid)) { skipped++; continue; }`. Since the combined event's uid was still present externally (updated, never deleted), it was marked `skipped` and the stale stripped summary was left on the user's real calendar permanently.
+  This directly undermined the reversibility AC9 is checking for ("pushes Garden Waste events... including ones withheld during a prior opted-out period") — it just happened that AC9's own test only exercised a *pure* garden-waste event (never pushed at all, hence naturally caught by the uid diff), not the combined-day case where the uid was never removed, just rewritten.
+- **Fix applied:** The combined-garden-waste branch now runs unconditionally (not gated on opt-in state) and computes a single `targetSummary` — `event.summary` (the full original) when opted in, `strippedSummary` when opted out. Whenever the event already exists externally, its current remote summary is compared against `targetSummary` and rewritten only on a mismatch, using the same `updateEventSummary`/`updateEvent` calls either direction already used. This is a strict generalization of the existing opt-out logic (M2's "compare before writing" pattern), not new machinery — the opt-out behaviour is byte-for-byte unchanged (verified: all pre-existing opt-out combined-day tests pass unmodified).
+- **New tests:** `runSync_gardenWasteOptedIn_alreadyPushedCombinedDayEventStillHasStrippedSummaryOnGoogle_restoresOriginalSummary`, `...OnIcloud_restoresOriginalSummary`, and `runSync_gardenWasteOptedIn_combinedDayAlreadyHasOriginalSummary_doesNotReWriteAgain` (the symmetric "don't re-write if already correct" guard for the opt-in direction).
 
 ### Minor (nice to fix)
 
-#### m1 — Inconsistent error guarding between `deleteEvent` and `updateEvent`
-- **Category:** Reliability
-- **Location:** `src/icloud.js:80-86` vs `:93-101`
-- **Description:** Both providers' `deleteEvent` deliberately swallow and log per-event failures so one bad event never aborts a run — a well-reasoned decision, documented in both files. `icloud.updateEvent` has no such guard, so a transient CalDAV failure (e.g. a 412 etag conflict) propagates to `syncProperty`'s catch, aborting every remaining event for that property and marking the whole property's sync failed. Combined with M2 (the update firing every run), a persistent conflict would repeatedly fail that property.
-- **Recommendation:** Apply the same try/catch-and-log treatment, or state in the comment why an update failure is deliberately fatal when a delete failure is not.
+#### m1 (new) — A genuine combined-day rewrite is counted as `added`, not a distinct `updated`
 
-#### m2 — `deleted++` counts attempted, not confirmed, deletions
-- **Category:** Reliability / Observability
-- **Location:** `src/sync.js:126-130`
-- **Description:** Because `deleteEvent` swallows its own errors, `deleted++` increments even when the deletion failed. `events_deleted` therefore over-reports, which matters more than usual given M3 proposes surfacing it as the user's audit trail for an irreversible action.
-- **Recommendation:** Have `deleteEvent` return a boolean success and increment only on `true`, or expose a separate failure count.
-
-#### m3 — Two new code paths uncovered by tests
-- **Category:** Test Coverage
-- **Location:** `src/sync.js:157`, `src/icloud.js:38`
-- **Description:** `sync.js:157` — the iCloud combined-day **first** push (`icloud.insertEvent(property, strippedEvent)`) — has no test; the equivalent Google path does. `icloud.js:38`'s false branch (a calendar object with no parseable `UID:`) is uncovered. Overall coverage remains excellent (97.18%/91.79%), well above the 80% gate.
-- **Recommendation:** Mirror `runSync_gardenWasteOptedOut_newCombinedDayEvent_pushesWithGardenWasteSegmentStripped` for `calendar_type: 'icloud'`.
-
-#### m4 — The warning modal has no keyboard or backdrop dismissal and no focus management
-- **Category:** Accessibility
-- **Location:** `public/properties.js:415-447`
-- **Description:** The new modal cannot be dismissed with Escape, clicking the backdrop does nothing, focus is not moved into the dialog or trapped, and it carries no `role="dialog"`/`aria-modal`/`aria-labelledby`. Cancel is reachable only by mouse-clicking the button. This is the project's first real modal, so whatever ships here sets the pattern.
-- **Recommendation:** Add an Escape listener wired to the same handler as Cancel (removed on close), focus the Cancel button on open, and add `role="dialog" aria-modal="true" aria-labelledby`.
-
-#### m5 — `google.listEvents` is unpaginated, which this PR newly makes a correctness issue for deletion
-- **Category:** Reliability
-- **Location:** `src/google.js:63-73`, consumed at `src/sync.js:104-105`
-- **Description:** `calendar.events.list` is called with no `maxResults` and no `pageToken` loop, so it returns at most Google's default 250 events. This is pre-existing and previously only caused redundant re-imports (made harmless by `iCalUID` dedup). This PR gives `existingByUid` a second, destructive responsibility: a garden-waste event that exists externally beyond page 1 is absent from the map and therefore **never deleted** on opt-out, silently failing AC10. The window is the full feed range (~14 months) against whatever calendar the user selected — which for a Google property defaults to `primary`, i.e. the user's entire personal calendar.
-- **Recommendation:** Add a `pageToken` loop (or `maxResults: 2500`) in `listEvents`. Pre-existing, so reasonable to split into a follow-up issue — but worth doing before relying on deletion correctness.
-
----
+- **Outcome:** ✅ Fixed (commit `b8651ec`)
+- **Category:** Code Quality / Observability
+- **Location:** `src/sync.js`, `src/migrations/008.sql`, `public/logs.js`
+- **Description:** The previous review's M2 offered two alternatives for the "miscounted as added" complaint: (a) skip a no-op rewrite (compare-before-write), or (b) introduce a distinct `updated` counter. The fix implemented (a), which correctly solved the dominant complaint (perpetual `events_added: 1` on every single run for a stable property). But the one genuine rewrite that *does* happen — the first sync after a property transitions state with a pre-existing combined-day event — was still counted via `added++` rather than a distinct category.
+- **Fix applied:** Per the user's explicit decision to do the full schema fix rather than leave this noted-but-unfixed: added migration `008.sql` (`sync_results.events_updated`), threaded a new `updated` parameter through `writeResult`, and both directions of the combined-day rewrite (opt-out strip, opt-in restore) now increment `updated` instead of `added`. `public/logs.js` renders `updated: N` only when non-zero, in the neutral text colour (not `--warning`, since this is an expected, benign correction — not a destructive action like `deleted`).
+- **New tests:** `runSync_gardenWasteOptedOut_combinedDayRewrite_isCountedAsEventsUpdatedNotEventsAdded`, `runSync_gardenWasteOptedIn_combinedDayRestore_isCountedAsEventsUpdatedNotEventsAdded`, `runSync_recordsUpdatedCountInSyncResults_includesEventsUpdatedColumnInInsertSql`, `initDb_migration008_addsEventsUpdatedToSyncResults`, and four new `logs-frontend.test.js` cases (non-zero, zero, missing-column, shown-alongside-deleted).
 
 ### Suggestions (optional)
 
-#### S1 — `writeResult` now takes eight positional parameters
-- **Location:** `src/sync.js:186`
-- `writeResult(db, runId, property.id, 0, 0, 0, msg, startedAt)` — three consecutive zeros make a transposed argument easy to introduce and hard to spot. An options object (`{ added, skipped, deleted, error }`) would be self-documenting.
+#### S1 (new) — `syncProperty` is a single ~115-line function handling five distinct classification branches
 
-#### S2 — Garden matchers are re-queried once per property per sync
-- **Location:** `src/sync.js:99-100`
-- `bin_types` is global, not per-property, so the query could be hoisted into `runSync` and passed down. Negligible at current scale; purely tidiness.
-
-#### S3 — The bin-types "Garden Waste" column gives no indication of what the flag does
-- **Location:** `public/properties.js:905` (header), `:920` (✓ cell)
-- The property-level toggle has strong explanatory copy; the bin-type flag — which is what actually *defines* garden waste for the whole feature, and which drives deletion — is a bare checkbox and ✓ with no hint text. Given C1, a line of guidance here (and a warning when no bin type is flagged, since the feature is then silently inert) would help.
+- **Outcome:** ⏭️ Skipped — deliberate, per the user's explicit decision
+- **Category:** Code Quality
+- **Location:** `src/sync.js`
+- **Description:** The function carries: no-ICS-URL handling, empty-feed handling, pure-garden-waste opted-out (delete), combined-garden-waste (now unified across both opt-in directions — see M1 (new)), and the generic non-garden path. Each branch is individually well-commented and tested, but the function as a whole is getting hard to hold in your head in one pass — a future bin-type-level generalisation (per the follow-up issue already filed as #35) will likely need to touch most of these branches again.
+- **Why skipped:** This finding's own recommendation explicitly deferred the extraction until "#35's generalization work begins" — doing it now, before #35 has a design, risks building an abstraction shaped by guesswork rather than #35's actual requirements (which will need to multiply this branching across every opt-in-required bin type, not just Garden Waste). The user confirmed skipping it for now when asked directly. Note: the M1 (new) fix above already *reduces* this function's branch count by one (the combined-day opt-out/opt-in cases are now a single unified block instead of two near-duplicates), so the complexity concern is marginally better than when this finding was first raised, not worse.
 
 ---
 
 ## Positive Observations
 
-- **Decision 2 is correctly and non-obviously implemented.** Classifying against the in-memory feed rather than the 6-month `events` cache is the kind of detail that is easy to get wrong and invisible when wrong — it would have silently under-filtered everything beyond six months. The reasoning is captured in a comment at the exact line it matters (`sync.js:94-98`).
-- **Task 2's refactor is genuinely behaviour-free**, and the proof is structural: `attribute-summary-segment.test.js` and `calendar-events.test.js` pass completely unmodified. Extracting the matching primitives *before* adding a second consumer is exactly the right sequencing, and it is why `sync.js` and `server.js` cannot drift on what "matches" means.
-- **The display layer gets the combined-day case for free**, because the pre-existing fan-out already splits a combined VEVENT into per-bin-type rows — so filtering one row leaves the other intact. Recognising and relying on that rather than building parallel logic is good judgement.
-- **Error-handling boundaries in the provider deletes are carefully drawn**: only the delete call is wrapped, so auth failures still reach `syncProperty`'s `isAuthError` handling and still mark credentials invalid. The comments explain the distinction.
-- **The `window.CONFIG` test-harness fix was correctly diagnosed and correctly placed.** It would have been easy and wrong to change `let CONFIG` to `var CONFIG` in production code to make a test pass; instead the jsdom-vs-browser scoping difference is explained and bridged in the harness.
-- **Test quality is high throughout** — real feed strings used as fixtures, comments explaining the real-world bug behind each case, and negative/regression assertions (e.g. "PUT without the field must not reference the column") rather than only happy paths.
-- **Rollout risk was surfaced proactively** in the Analysis, the Design, and the PR description, rather than being left for a reviewer to discover.
+- All nine findings from the prior review pass are genuinely fixed, not just marked done — I independently re-verified C1, M1 (old), M2 (old), m1–m5, S1–S3 against the current code and, where user-facing, against the running app (headless Chromium): the blank-wildcard rejection, the off-switch modal's full keyboard/ARIA/focus behaviour across repeated open/close cycles, the Logs page's conditional `deleted: N` rendering, and the Bin Types inert-warning banner all behave exactly as each fix commit claims.
+- `src/bin-types.js`'s extraction is a clean, zero-behaviour-change refactor — confirmed by the full pre-existing suite passing unmodified, and the new module sits at 100% coverage on all four metrics.
+- The decision to classify Garden Waste against the **full in-memory feed** rather than the 6-month local cache (Design Decision 2) is correctly implemented and explicitly tested (`runSync_gardenWasteOptedOut_stillCachesTheGardenWasteEventDespiteNotPushingIt`) — an easy mistake to make that the team clearly thought through up front.
+- `deleteEvent`/`updateEvent`/`updateEventSummary` across both providers consistently return `true`/`false` rather than throwing on a per-event failure, and `sync.js` only increments its audit counters on confirmed success — this is exactly the right error-isolation boundary for the one genuinely destructive code path in the app.
+- Test naming and Arrange-Act-Assert structure are followed with unusual discipline across ~1,700 new lines of test code; several tests explicitly document the *real-world feed string* they're guarding against (e.g. the exact "+food only after transition week" caveat), which will make future regressions much easier to diagnose.
+- `tests/helpers/testDb.js`'s fix (reading the migrations directory dynamically instead of a hardcoded list already two migrations stale) is a good, scoped catch that improves confidence in every other test file's real-DB coverage, not just this PR's own tests.
 
 ---
 
 ## Action Items
 
 ### Immediate Fixes (block merge)
-- [ ] **C1:** Reject bin-type Match text that is empty after wildcard stripping, and make the matching primitives treat a blank matcher as matching nothing. Add regression tests for both.
+- None — no Critical findings.
 
 ### Should fix before merge (team's call)
-- [ ] **M1:** Implement the Google combined-day in-place update via `events.patch` using the event ID already in `existingByUid` — or correct the comment's rationale.
-- [ ] **M2:** Skip the iCloud combined-day update when the remote summary already matches; stop counting it as `added`.
-- [ ] **M3:** Surface `events_deleted` on the Logs page.
+- [x] M1 (new): combined-day summary not restored on re-opt-in — fixed in commit `b8651ec`.
 
 ### Post-merge improvements
-- [ ] m1: Align `icloud.updateEvent` error handling with `deleteEvent` — create issue
-- [ ] m2: Count confirmed rather than attempted deletions — create issue
-- [ ] m3: Cover `sync.js:157` (iCloud combined-day first push) — create issue
-- [ ] m4: Modal keyboard dismissal, focus management and ARIA — create issue
-- [ ] m5: Paginate `google.listEvents` — create issue via `/analyse` (pre-existing, now load-bearing)
+- [x] m1 (new): `events_updated` counter added — fixed in commit `b8651ec`.
+- [ ] S1 (new): extract `syncProperty`'s per-event classification into a helper when #35's generalization work begins — deliberately not done now.
 
 ---
 
@@ -342,11 +252,11 @@ Flat — no parent, no sub-issues (confirmed via GraphQL `subIssues`).
 
 - [x] All acceptance criteria from the full issue hierarchy verified by reading actual code
 - [x] Every changed file read and audited
-- [x] Tests cover happy path, error paths, and edge cases — with the gaps noted in m3 and C1
-- [x] Lint run — zero errors introduced by this PR (0 errors, 0 warnings)
-- [ ] No security vulnerabilities introduced — no injection/XSS surface added, but C1 is an input-validation failure with destructive consequences
-- [x] No performance regressions — M2's redundant write is bounded to combined-day events
-- [ ] Error handling complete and consistent — see m1, m2
-- [ ] Logging adequate for debugging production issues — see M3 (deletions not surfaced)
+- [x] Tests cover happy path, error paths, and edge cases (one gap found: combined-day re-opt-in restoration — see M1 new)
+- [x] Lint run — zero errors introduced by this PR
+- [x] No security vulnerabilities introduced
+- [x] No performance regressions
+- [x] Error handling complete and consistent
+- [x] Logging adequate for debugging production issues
 - [x] Code follows existing codebase conventions
 - [x] No unnecessary changes outside scope of the issue
