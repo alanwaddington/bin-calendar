@@ -504,7 +504,6 @@ h2 {
 .badge-skipped { background: var(--muted-bg);    color: var(--muted); }
 .badge-failed  { background: var(--danger-bg);   color: var(--danger); }
 .badge-partial { background: var(--partial-bg);  color: var(--partial); }
-.badge-paid    { background: var(--warning-bg);  color: var(--warning); margin-left: 6px; }
 
 @keyframes badgePulse {
   0%, 100% { opacity: 1; }

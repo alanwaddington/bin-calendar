@@ -394,7 +394,7 @@ function buildOptInSwitches(idPrefix, optedInIds) {
             <div class="opt-in-switches">
               ${flagged.map(bt => `
               <label class="checkbox-label">
-                <input type="checkbox" id="${idPrefix}-${bt.id}" data-bin-type-id="${bt.id}" ${optedInIds.includes(bt.id) ? 'checked' : ''}>
+                <input type="checkbox" id="${idPrefix}-${bt.id}" ${optedInIds.includes(bt.id) ? 'checked' : ''}>
                 <span class="bin-type-colour-dot" style="background:${escAttr(bt.colour)}"></span>
                 ${escHtml(bt.label)}
               </label>`).join('')}

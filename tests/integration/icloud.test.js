@@ -24,7 +24,7 @@ jest.mock('../../src/crypto', () => ({
 
 const { DAVClient } = require('tsdav');
 const { decryptJson } = require('../../src/crypto');
-const { fetchCalendars, listEventUids, insertEvent, listEventObjects, deleteEvent, updateEvent, extractSummary } = require('../../src/icloud');
+const { fetchCalendars, insertEvent, listEventObjects, deleteEvent, updateEvent, extractSummary } = require('../../src/icloud');
 
 describe('icloud', () => {
   beforeEach(() => {
@@ -41,19 +41,6 @@ describe('icloud', () => {
     expect(calendars).toEqual([
       { displayName: 'My Calendar', url: 'https://caldav.icloud.com/123' },
     ]);
-  });
-
-  test('listEventUids_withMatchingObjects_returnsUidSet', async () => {
-    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
-    mockInstance.fetchCalendarObjects.mockResolvedValue([
-      { data: 'BEGIN:VEVENT\r\nUID:abc123\r\nEND:VEVENT' },
-    ]);
-
-    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
-    const uids = await listEventUids(property, new Date('2026-04-01'), new Date('2026-04-30'));
-
-    expect(uids).toBeInstanceOf(Set);
-    expect(uids.has('abc123')).toBe(true);
   });
 
   test('insertEvent_createsCalendarObjectWithCorrectIcs', async () => {
@@ -117,8 +104,8 @@ describe('icloud', () => {
     expect(call.iCalString).not.toContain('DESCRIPTION:');
   });
 
-  // #33 Task 4: deletion needs the dav object's url/etag, which
-  // listEventUids has always discarded after parsing out the uid.
+  // #33 Task 4: deletion needs the dav object's url/etag, which is why
+  // this returns the full dav object per uid.
   test('listEventObjects_withMatchingObjects_returnsMapOfUidToDavObjectPreservingUrlAndEtag', async () => {
     const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
     const davObject = { url: 'https://caldav.icloud.com/123/evt-abc.ics', etag: '"etag-1"', data: 'BEGIN:VEVENT\r\nUID:abc123\r\nEND:VEVENT' };
@@ -129,21 +116,6 @@ describe('icloud', () => {
 
     expect(objects).toBeInstanceOf(Map);
     expect(objects.get('abc123')).toBe(davObject);
-  });
-
-  // listEventUids must keep working exactly as before - re-expressed in
-  // terms of listEventObjects, but existing callers are unaffected.
-  test('listEventUids_stillReturnsUidSet_whenReExpressedInTermsOfListEventObjects', async () => {
-    const mockInstance = DAVClient.mock.results[0]?.value || DAVClient();
-    mockInstance.fetchCalendarObjects.mockResolvedValue([
-      { url: 'u1', etag: 'e1', data: 'BEGIN:VEVENT\r\nUID:xyz789\r\nEND:VEVENT' },
-    ]);
-
-    const property = { credentials: 'encrypted', calendar_id: 'https://caldav.icloud.com/123' };
-    const uids = await listEventUids(property, new Date('2026-04-01'), new Date('2026-04-30'));
-
-    expect(uids).toBeInstanceOf(Set);
-    expect(uids.has('xyz789')).toBe(true);
   });
 
   // PR #34 review finding m3: a calendar object with no parseable UID

@@ -156,12 +156,6 @@ async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
     const timeMin = new Date(Math.min(...dates, today.getTime()));
     const timeMax = new Date(Math.max(...dates, sixMonthsAhead.getTime()));
 
-    // #33: classified against the full in-memory feed below (whatever
-    // range fetchIcs actually returned - often ~14 months), never against
-    // the local cache, which only ever holds a 6-month window (cacheEvents
-    // at the end of this function) and would silently under-filter
-    // anything beyond it.
-
     let existingByUid;
     if (property.calendar_type === 'google') {
       // PR #34 review finding M2: carries each event's current summary
@@ -189,6 +183,11 @@ async function syncProperty(db, runId, property, flaggedBinTypes, optInSet) {
     // needs restoring" - this flag is what makes that distinction.
     const allFlaggedMatchers = flaggedBinTypes.map(bt => bt.summary_match);
 
+    // #33: classified against the full in-memory feed below (whatever
+    // range fetchIcs actually returned - often ~14 months), never against
+    // the local cache, which only ever holds a 6-month window (cacheEvents
+    // at the end of this function) and would silently under-filter
+    // anything beyond it.
     let added = 0, skipped = 0, deleted = 0, updated = 0;
     for (const event of events) {
       const targetSummary = stripMatchingSegments(event.summary, withheldMatchers);

@@ -36,7 +36,6 @@ describe('sync', () => {
     // assertions keep passing; failure is tested explicitly where it matters.
     google.deleteEvent.mockResolvedValue(true);
     google.updateEventSummary.mockResolvedValue(true);
-    icloud.listEventUids.mockResolvedValue(new Set());
     icloud.listEventObjects.mockResolvedValue(new Map());
     icloud.insertEvent.mockResolvedValue(undefined);
     icloud.deleteEvent.mockResolvedValue(true);
@@ -157,7 +156,6 @@ describe('sync', () => {
       }],
       warnings: [],
     });
-    icloud.listEventUids.mockResolvedValue(new Set());
 
     await runSync();
 

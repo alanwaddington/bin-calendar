@@ -129,8 +129,7 @@ app.put('/api/properties/:id', (req, res) => {
       const result = db.prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
       if (result.changes === 0) return true;
       // #35: opted_in_bin_type_ids is only touched when the caller actually
-      // sends it - omitting it must preserve the existing opt-in set,
-      // mirroring the old garden_waste_opted_in behaviour.
+      // sends it - omitting it must preserve the existing opt-in set.
       if (sanitisedOptIns) {
         replaceOptIns(db, req.params.id, sanitisedOptIns.ids);
       }

@@ -22,9 +22,8 @@ async function fetchCalendars(appleId, appPassword) {
 }
 
 // #33: deletion needs each object's url/etag (deleteCalendarObject's own
-// requirement), which listEventUids has always discarded after parsing out
-// just the uid. listEventUids is re-expressed in terms of this so both
-// stay in agreement about what counts as "present".
+// requirement), which is why this returns the full dav object per uid
+// rather than just a set of uids.
 async function listEventObjects(property, timeMin, timeMax) {
   const creds = decryptJson(property.credentials);
   const client = await createClient(creds);
@@ -38,11 +37,6 @@ async function listEventObjects(property, timeMin, timeMax) {
     if (match) byUid.set(match[1].trim(), obj);
   }
   return byUid;
-}
-
-async function listEventUids(property, timeMin, timeMax) {
-  const objects = await listEventObjects(property, timeMin, timeMax);
-  return new Set(objects.keys());
 }
 
 function buildVCalendarString(event) {
@@ -146,4 +140,4 @@ async function checkCredentials(property) {
   }
 }
 
-module.exports = { fetchCalendars, listEventUids, listEventObjects, insertEvent, updateEvent, deleteEvent, extractSummary, checkCredentials };
+module.exports = { fetchCalendars, listEventObjects, insertEvent, updateEvent, deleteEvent, extractSummary, checkCredentials };
