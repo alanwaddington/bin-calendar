@@ -73,18 +73,34 @@ function replaceOptIns(db, propertyId, binTypeIds) {
   for (const binTypeId of binTypeIds) insert.run(propertyId, binTypeId);
 }
 
+// PR #37 review finding M3: validates and deduplicates a client-supplied
+// opted_in_bin_type_ids array at the boundary, before any SQL runs.
+// Previously a duplicate id hit the (property_id, bin_type_id) composite
+// PRIMARY KEY and a non-integer element hit a NOT NULL/type constraint -
+// both surfaced as raw, unhandled SQLite 500s. Returns null (never
+// touched - field omitted) when ids is undefined, { error } when present
+// but invalid, or { ids } deduplicated and ready for replaceOptIns.
+function sanitiseOptInIds(ids) {
+  if (ids === undefined) return null;
+  if (!Array.isArray(ids)) return { error: 'opted_in_bin_type_ids must be an array of integers' };
+  if (!ids.every(Number.isInteger)) return { error: 'opted_in_bin_type_ids must be an array of integers' };
+  return { ids: [...new Set(ids)] };
+}
+
 app.post('/api/properties', (req, res) => {
   const { label, ics_url, calendar_type, opted_in_bin_type_ids } = req.body;
   if (!label || !ics_url || !calendar_type) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
+  const sanitisedOptIns = sanitiseOptInIds(opted_in_bin_type_ids);
+  if (sanitisedOptIns?.error) return res.status(400).json({ error: sanitisedOptIns.error });
   const db = getDb();
   try {
     const id = db.transaction(() => {
       const result = db.prepare(
         'INSERT INTO properties (label, uprn, ics_url, calendar_type, calendar_id) VALUES (?, ?, ?, ?, ?)'
       ).run(label, '', ics_url, calendar_type, calendar_type === 'google' ? 'primary' : null);
-      if (Array.isArray(opted_in_bin_type_ids)) {
-        replaceOptIns(db, result.lastInsertRowid, opted_in_bin_type_ids);
+      if (sanitisedOptIns) {
+        replaceOptIns(db, result.lastInsertRowid, sanitisedOptIns.ids);
       }
       return result.lastInsertRowid;
     })();
@@ -101,17 +117,26 @@ app.put('/api/properties/:id', (req, res) => {
   const { label, ics_url, opted_in_bin_type_ids } = req.body;
   if (!label || !ics_url) return res.status(400).json({ error: 'Missing fields' });
   if (!isValidIcsUrl(ics_url)) return res.status(400).json({ error: 'Invalid ICS URL: must start with https:// or webcal://' });
+  const sanitisedOptIns = sanitiseOptInIds(opted_in_bin_type_ids);
+  if (sanitisedOptIns?.error) return res.status(400).json({ error: sanitisedOptIns.error });
   const db = getDb();
   try {
-    db.transaction(() => {
-      db.prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+    // PR #37 review finding M3: a nonexistent property id previously
+    // "succeeded" with 200 {ok:true} - the UPDATE's own `changes` count
+    // now distinguishes a real update from a no-op on a missing row, and
+    // the opt-in replacement never runs for a property that doesn't exist.
+    const notFound = db.transaction(() => {
+      const result = db.prepare('UPDATE properties SET label = ?, ics_url = ? WHERE id = ?').run(label, ics_url, req.params.id);
+      if (result.changes === 0) return true;
       // #35: opted_in_bin_type_ids is only touched when the caller actually
       // sends it - omitting it must preserve the existing opt-in set,
       // mirroring the old garden_waste_opted_in behaviour.
-      if (Array.isArray(opted_in_bin_type_ids)) {
-        replaceOptIns(db, req.params.id, opted_in_bin_type_ids);
+      if (sanitisedOptIns) {
+        replaceOptIns(db, req.params.id, sanitisedOptIns.ids);
       }
+      return false;
     })();
+    if (notFound) return res.status(404).json({ error: 'Property not found' });
     res.json({ ok: true });
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
@@ -447,11 +472,18 @@ app.post('/api/sync', async (req, res) => {
 // #35 Task 6: scoped to a single property - runSync(propertyId) inherits
 // the lock, the sync_runs row, and the success/partial/failed/skipped
 // rollup unchanged, so this mirrors POST /api/sync exactly, just passing
-// the id through. An unknown id, or one without credentials/calendar_id,
-// naturally falls into the existing "Skipped — no properties configured"
+// the id through. An EXISTING property without credentials/calendar_id
+// naturally falls into runSync's own "Skipped — no properties configured"
 // shape - never a misleading success, never a 500.
+//
+// PR #37 review finding m4: a genuinely UNKNOWN property id used to fall
+// into that same 200 skip shape, making it indistinguishable from "exists
+// but isn't connected" - existence is checked first and reported as a
+// distinct 404, before runSync (and its concurrency lock) is even touched.
 app.post('/api/properties/:id/sync', async (req, res) => {
   try {
+    const property = getDb().prepare('SELECT id FROM properties WHERE id = ?').get(req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found' });
     const result = await runSync(req.params.id);
     res.status(result.status).json(result);
   } catch (err) {

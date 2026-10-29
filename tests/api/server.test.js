@@ -143,19 +143,33 @@ describe('server API', () => {
     expect(res.body.message).toMatch(/already in progress/i);
   });
 
-  // Unknown property id, or one without credentials/calendar_id, is
-  // exactly the existing "Skipped - no properties configured" shape -
-  // never a misleading success, never a 500.
-  test('POST /api/properties/:id/sync with an unknown or disconnected property returns the skipped shape, not a false success', async () => {
+  // An EXISTING property with no credentials/calendar_id falls into
+  // runSync's own "Skipped - no properties configured" shape - never a
+  // misleading success, never a 500. A genuinely UNKNOWN property id is
+  // handled separately below (404, before runSync is even called) -
+  // PR #37 review finding m4: previously both cases returned this same
+  // 200 skip shape, making "property doesn't exist" indistinguishable
+  // from "property exists but isn't connected".
+  test('POST /api/properties/:id/sync with a disconnected (but existing) property returns the skipped shape, not a false success', async () => {
     // PR #37 review finding m2: overallStatus: 'skipped' lets callers
     // branch on a structured field instead of matching message prose.
     runSync.mockResolvedValue({ status: 200, message: 'Skipped — no properties configured', overallStatus: 'skipped' });
 
-    const res = await request(app).post('/api/properties/999/sync');
+    const res = await request(app).post('/api/properties/42/sync');
 
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/Skipped/i);
     expect(res.body.overallStatus).toBe('skipped');
+  });
+
+  test('POST /api/properties/:id/sync with an unknown property returns 404 and never calls runSync', async () => {
+    mockPrepare.get.mockReturnValueOnce(null); // SELECT id FROM properties WHERE id = ? finds nothing
+
+    const res = await request(app).post('/api/properties/999/sync');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(runSync).not.toHaveBeenCalled();
   });
 
   test('POST /api/properties/:id/sync returns 500 when runSync throws', async () => {
@@ -386,6 +400,86 @@ describe('server API', () => {
     // further statements (e.g. a 3rd opt-in id, or anything after this
     // route) ran once the transaction's callback threw.
     expect(mockPrepare.run).toHaveBeenCalledTimes(4);
+  });
+
+  // PR #37 review finding M3: a duplicate id in opted_in_bin_type_ids
+  // violated the (property_id, bin_type_id) composite PRIMARY KEY and
+  // surfaced as a raw SQLite 500 ("UNIQUE constraint failed") rather than
+  // being handled - duplicates are harmless client-side noise (e.g. a
+  // stray double-count), not a real error, so they're deduplicated
+  // before ever reaching SQL.
+  test('POST /api/properties with duplicate ids in opted_in_bin_type_ids deduplicates instead of erroring', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [5, 5, 7] });
+
+    expect(res.status).toBe(201);
+    // run() call 0 is the property INSERT, call 1 is replaceOptIns' DELETE,
+    // then exactly one INSERT per UNIQUE id - 3 total, not 4.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(4);
+    expect(mockPrepare.run.mock.calls[2]).toEqual([1, 5]);
+    expect(mockPrepare.run.mock.calls[3]).toEqual([1, 7]);
+  });
+
+  test('PUT /api/properties/:id with duplicate ids in opted_in_bin_type_ids deduplicates instead of erroring', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [5, 5] });
+
+    expect(res.status).toBe(200);
+    // run() call 0 is the label/ics_url UPDATE, call 1 is the DELETE, then
+    // exactly one INSERT for the deduplicated id.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(3);
+  });
+
+  // PR #37 review finding M3: a non-integer element (null, a string, an
+  // object) violated the bin_type_id NOT NULL/type constraints and also
+  // surfaced as a raw SQLite 500 - rejected with a clear 400 instead,
+  // before any SQL runs at all.
+  test('POST /api/properties with a non-integer element in opted_in_bin_type_ids returns 400, not 500', async () => {
+    const res = await request(app)
+      .post('/api/properties')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', calendar_type: 'google', opted_in_bin_type_ids: [5, null] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/integer/i);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  test('PUT /api/properties/:id with a non-integer element in opted_in_bin_type_ids returns 400, not 500', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: ['not-a-number'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/integer/i);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  test('PUT /api/properties/:id with opted_in_bin_type_ids sent as a non-array returns 400, not a silent no-op', async () => {
+    const res = await request(app)
+      .put('/api/properties/1')
+      .send({ label: 'Home', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: 'not-an-array' });
+
+    expect(res.status).toBe(400);
+    expect(mockPrepare.run).not.toHaveBeenCalled();
+  });
+
+  // PR #37 review finding M3: PUT on an id that doesn't exist silently
+  // "succeeded" with 200 {ok:true} - the UPDATE's `changes` count is now
+  // checked to tell a real update apart from a no-op on a missing row.
+  test('PUT /api/properties/:id for a property that does not exist returns 404, not a false 200', async () => {
+    mockPrepare.run.mockImplementationOnce(() => ({ changes: 0 })); // UPDATE matched no row
+
+    const res = await request(app)
+      .put('/api/properties/999')
+      .send({ label: 'Ghost', ics_url: 'https://example.com/cal.ics', opted_in_bin_type_ids: [5] });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    // The opt-in replacement must never run against a property that was
+    // never actually updated.
+    expect(mockPrepare.run).toHaveBeenCalledTimes(1);
   });
 
   test('GET /api/google/auth-url/:propertyId returns auth URL when configured', async () => {
